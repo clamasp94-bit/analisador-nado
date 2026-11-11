@@ -35,7 +35,7 @@ except ImportError:
 
 # Versão do pipeline — exibida na barra lateral do app; o valor no ar
 # confirma qual código está realmente rodando no Streamlit Cloud.
-VERSION = "v9-limiares-ajustaveis"
+VERSION = "v10-import-blindado"
 
 
 # ----------------------------------------------------------------------------

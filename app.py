@@ -39,14 +39,74 @@ except Exception:
     st.code(traceback.format_exc())
     st.stop()
 
-STYLE_CONFIG = _sa.STYLE_CONFIG
-DEFAULT_THRESHOLDS = _sa.DEFAULT_THRESHOLDS
-SwimAnalyzer = _sa.SwimAnalyzer
-gerar_pdf = _sa.gerar_pdf
+STYLE_CONFIG = getattr(_sa, "STYLE_CONFIG", None) or {
+    "crawl": {"label": "Crawl (freestyle)"}, "peito": {"label": "Peito (breaststroke)"},
+    "costas": {"label": "Costas (backstroke)"}, "borboleta": {"label": "Borboleta (butterfly)"},
+}
+SwimAnalyzer = getattr(_sa, "SwimAnalyzer", None)
+gerar_pdf = getattr(_sa, "gerar_pdf", None)
+
+# getattr blindado com FALLBACK inline: um swim_analyzer.py desatualizado no
+# repositório não pode derrubar o app — a tabela de limiares v9 é recriada aqui
+FALLBACK_THRESHOLDS = {
+    "crawl": {
+        "cotovelo_min": {"valor": 80.0, "unidade": "graus", "fonte": "Vanderbilt YSJ 2025",
+                         "descricao": "Ângulo mínimo do cotovelo na recuperação (alto cotovelo)"},
+        "cotovelo_max": {"valor": 100.0, "unidade": "graus", "fonte": "Vanderbilt YSJ 2025",
+                         "descricao": "Ângulo máximo do cotovelo na recuperação"},
+        "cadencia_min": {"valor": 55.0, "unidade": "cpm", "fonte": "Triathlete (elite 55–100 cpm)",
+                         "descricao": "Cadência mínima de braçadas por lado"},
+        "cadencia_max": {"valor": 75.0, "unidade": "cpm", "fonte": "Triathlete (elite 55–100 cpm)",
+                         "descricao": "Cadência máxima de braçadas por lado (não-sprint)"},
+        "tronco_max": {"valor": 20.0, "unidade": "graus", "fonte": "SwimSmart (cabeça neutra)",
+                       "descricao": "Inclinação máxima do tronco (ombro–quadril vs. vertical)"},
+        "simetria_min": {"valor": 0.80, "unidade": "razão", "fonte": "HEURÍSTICO",
+                         "descricao": "Razão mínima de rotação entre os lados (1,00 = simétrico)"},
+    },
+    "peito": {
+        "ciclo_min": {"valor": 1.6, "unidade": "s/ciclo", "fonte": "SwimNow (referência 200 m)",
+                      "descricao": "Duração mínima do ciclo de braçada (deslize completo)"},
+        "ciclo_max": {"valor": 1.8, "unidade": "s/ciclo", "fonte": "SwimNow (referência 200 m)",
+                      "descricao": "Duração máxima do ciclo de braçada"},
+        "deslize_max": {"valor": 22.0, "unidade": "% do ciclo", "fonte": "SwimSwam (elite ≤22%)",
+                        "descricao": "Fração máxima do ciclo em deslize passivo"},
+        "joelho_flex_max": {"valor": 165.0, "unidade": "graus", "fonte": "HEURÍSTICO",
+                            "descricao": "Flexão máxima do joelho na recuperação da pernada"},
+        "tronco_max": {"valor": 20.0, "unidade": "graus", "fonte": "HEURÍSTICO (mesma lógica do crawl)",
+                       "descricao": "Inclinação máxima do tronco entre as respirações"},
+    },
+    "costas": {
+        "rotacao_min": {"valor": 35.0, "unidade": "graus/lado", "fonte": "Swim Like A Fish / RocketSwim",
+                        "descricao": "Rotação mínima do corpo por lado"},
+        "rotacao_max": {"valor": 45.0, "unidade": "graus/lado", "fonte": "Swim Like A Fish / RocketSwim",
+                        "descricao": "Rotação máxima do corpo por lado"},
+        "cabeca_osc_max": {"valor": 8.0, "unidade": "% do torso", "fonte": "HEURÍSTICO",
+                           "descricao": "Oscilação máxima da cabeça (desvio-padrão normalizado)"},
+        "simetria_min": {"valor": 0.80, "unidade": "razão", "fonte": "HEURÍSTICO",
+                         "descricao": "Razão mínima de rotação entre os lados"},
+    },
+    "borboleta": {
+        "batidas_alvo": {"valor": 2.0, "unidade": "batidas/ciclo", "fonte": "USMS / Vasa",
+                         "descricao": "Batidas de golfinho por ciclo de braços"},
+        "batidas_tol": {"valor": 0.5, "unidade": "batidas/ciclo", "fonte": "HEURÍSTICO",
+                        "descricao": "Tolerância aceita em torno do alvo de batidas"},
+        "ondulacao_min": {"valor": 0.08, "unidade": "× torso", "fonte": "HEURÍSTICO",
+                          "descricao": "Ondulação mínima do quadril (pico-a-pico / torso)"},
+    },
+}
+DEFAULT_THRESHOLDS = getattr(_sa, "DEFAULT_THRESHOLDS", FALLBACK_THRESHOLDS)
+
 # getattr blindado: um swim_analyzer.py desatualizado no repositório não
 # pode derrubar o app por falta deste símbolo
 VERSION = getattr(_sa, "VERSION", "versão desconhecida (swim_analyzer.py "
                                   "desatualizado — substitua-o pelo do pacote)")
+if SwimAnalyzer is None or gerar_pdf is None:
+    st.error("**`swim_analyzer.py` desatualizado no repositório.** O `app.py` "
+             "atual precisa das funções `SwimAnalyzer`/`gerar_pdf` da v9+. "
+             "Substitua **ambos** os arquivos (`app.py` e `swim_analyzer.py`) "
+             "pelos do pacote mais recente e faça o Commit.")
+    st.code(traceback.format_exc())
+    st.stop()
 
 st.set_page_config(page_title="Analisador de Nado", page_icon="🏊", layout="wide")
 
