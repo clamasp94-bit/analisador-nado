@@ -33,6 +33,10 @@ try:
 except ImportError:
     sys.exit("mediapipe não instalado. Rode: pip install mediapipe==0.10.14 opencv-python numpy")
 
+# Versão do pipeline — exibida na barra lateral do app; o valor no ar
+# confirma qual código está realmente rodando no Streamlit Cloud.
+VERSION = "v5-bugfix-json-feedback"
+
 
 # ----------------------------------------------------------------------------
 # Configuração por estilo: limiares + fontes
@@ -389,6 +393,9 @@ class SwimAnalyzer:
 
     # ------------------------------------------------------------------ #
     def feedback(self, m):
+        # Sanitiza NaN: comparações/formatos com NaN não devem derrubar o relatório
+        m = {k: (None if isinstance(v, float) and math.isnan(v) else v)
+             for k, v in m.items()}
         cfg, fb = self.cfg, []
         S = {  # fontes por métrica
             "VAN": "[Vanderbilt YSJ 2025](https://www.vanderbilt.edu/youngscientistjournal/article/swimming-stroke-analysis-and-technique-improvement-via-pose-estimation/)",
@@ -626,8 +633,15 @@ class SwimAnalyzer:
 
     def report(self):
         m = self.metrics()
-        return {"estilo": self.style, "metricas": m,
-                "feedback": self.feedback(m)}
+        m = {k: (None if isinstance(v, float) and math.isnan(v) else v)
+             for k, v in m.items()}
+        try:
+            fb = self.feedback(m)
+        except Exception:
+            # um problema isolado no feedback não pode derrubar o relatório todo
+            fb = ["(feedback indisponível para este vídeo — consulte as métricas "
+                  "acima; se persistir, relate o erro com o traceback)"]
+        return {"estilo": self.style, "metricas": m, "feedback": fb}
 
 
 def gerar_pdf(rep, keyframes, ts, out_path):

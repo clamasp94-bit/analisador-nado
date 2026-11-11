@@ -22,7 +22,7 @@ import streamlit as st
 # garante que o import do analisador funciona ao rodar `streamlit run`
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from swim_analyzer import STYLE_CONFIG, SwimAnalyzer, gerar_pdf  # noqa: E402
+from swim_analyzer import STYLE_CONFIG, SwimAnalyzer, VERSION, gerar_pdf  # noqa: E402
 
 st.set_page_config(page_title="Analisador de Nado", page_icon="🏊", layout="wide")
 
@@ -77,7 +77,7 @@ def analisar(video_bytes, filename, estilo_sel):
 
         pdf_buf = io.BytesIO()
         gerar_pdf(rep, keyframes, ts, pdf_buf)
-        json_buf = io.BytesIO()
+        json_buf = io.StringIO()  # json.dump escreve str: BytesIO quebra com TypeError
         import json as _json
         _json.dump(rep, json_buf, ensure_ascii=False, indent=2)
         return rep, pdf_buf.getvalue(), json_buf.getvalue()
@@ -88,6 +88,7 @@ def analisar(video_bytes, filename, estilo_sel):
 # --- barra lateral -----------------------------------------------------------
 with st.sidebar:
     st.header("Configurações")
+    st.caption(f"Pipeline {VERSION}")
     estilo_sel = st.selectbox(
         "Estilo do nado",
         ["auto", *STYLE_CONFIG],
