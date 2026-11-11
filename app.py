@@ -24,7 +24,7 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from swim_analyzer import STYLE_CONFIG, SwimAnalyzer, VERSION, gerar_pdf  # noqa: E402
+    import swim_analyzer as _sa
 except Exception:
     # no cloud, um erro aqui aparece cortado nos logs — exibe o traceback
     # COMPLETO na própria tela para diagnóstico imediato
@@ -36,6 +36,14 @@ except Exception:
              "\n\n**Traceback completo:**")
     st.code(traceback.format_exc())
     st.stop()
+
+STYLE_CONFIG = _sa.STYLE_CONFIG
+SwimAnalyzer = _sa.SwimAnalyzer
+gerar_pdf = _sa.gerar_pdf
+# getattr blindado: um swim_analyzer.py desatualizado no repositório não
+# pode derrubar o app por falta deste símbolo
+VERSION = getattr(_sa, "VERSION", "versão desconhecida (swim_analyzer.py "
+                                  "desatualizado — substitua-o pelo do pacote)")
 
 st.set_page_config(page_title="Analisador de Nado", page_icon="🏊", layout="wide")
 

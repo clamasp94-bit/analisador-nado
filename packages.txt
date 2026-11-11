@@ -1,4 +1,3 @@
-# Libs de sistema (apt) que o Streamlit Cloud instala antes do pip
 libgl1
 libglib2.0-0
 libportaudio2

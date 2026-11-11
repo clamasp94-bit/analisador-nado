@@ -1,7 +1,3 @@
-# Combinação testada em venv limpo (sem conflitos de resolução):
-# - streamlit 1.49.x é a linha compatível com protobuf <5, exigido pelo mediapipe 0.10.14
-# - opencv-python-HEADLESS evita erro de libGL no Streamlit Cloud
-# - Python 3.12 obrigatório (mediapipe não tem wheels para 3.13+)
 streamlit==1.49.1
 mediapipe==0.10.14
 protobuf>=4.25.3,<5
