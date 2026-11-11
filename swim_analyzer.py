@@ -35,65 +35,141 @@ except ImportError:
 
 # Versão do pipeline — exibida na barra lateral do app; o valor no ar
 # confirma qual código está realmente rodando no Streamlit Cloud.
-VERSION = "v8-selecao-estilo"
+VERSION = "v9-limiares-ajustaveis"
 
 
 # ----------------------------------------------------------------------------
-# Configuração por estilo: limiares + fontes
+# TABELA DE LIMIARES PADRÃO POR ESTILO (ajustáveis pelo usuário no app)
 # ----------------------------------------------------------------------------
-# Fontes usadas:
-#  [VAN]  Vanderbilt Young Scientist Journal (2025) — cotovelo 80-100° na
-#         recuperação do crawl (96% de acerto), contagem de braçadas 98%.
-#  [TRI]  Triathlete Magazine, "What Is The Ideal Stroke Rate?" — elites
-#         em provas >400 m: ~55-100 braçadas/min.
-#  [SWI]  SwimSmart Today / The Race Club — tronco horizontal, cabeça neutra.
-#  [BNB]  SwimNow, "The Breaststroke Blueprint" — 200 m peito: 1,6-1,8 s/braçada.
-#  [GLI]  SwimSwam — nadadores rápidos limitam a fase de deslize não
-#         propulsiva a ~22% do tempo (não-elites >=27%).
-#  [IMG]  IMG Academy — temporização "puxar e respirar, bater e deslizar".
-#  [HK]   Human Kinetics — recuperação de perna do peito: joelhos na largura
-#         do quadril, flexão de quadril e joelho, calcanhares aos glúteos.
-#  [SLF]  Swim Like A Fish / RocketSwim — rotação do costas: 35-45° por lado.
-#  [USM]  USMS — costas: posição do corpo e rotação; borboleta: 2 batidas
-#         por ciclo de braços.
-#  [VAS]  Vasa / Wikipedia — borboleta: 2 batidas por ciclo, ondulação do corpo.
-#  [STR]  Strzała et al. 2017 (PMC5765785) — ondulação corporal na borboleta.
-STYLE_CONFIG = {
+# Cada limiar: valor padrão, unidade, descrição e fonte.
+# "HEURÍSTICO" = sem fonte externa citada.
+DEFAULT_THRESHOLDS = {
     "crawl": {
-        "label": "Crawl (freestyle)",
-        "cycle_mode": "alternate",      # braços alternados -> ciclos por lado
-        "min_cycle_s": 0.6,
-        "elbow_band": (80.0, 100.0, "VAN"),
-        "sr_band": (55.0, 75.0, "TRI"),
-        "trunk_max": 20.0,              # graus, fonte SWI
-        "symmetry_min": 0.80,           # HEURÍSTICO
-    },
-    "costas": {
-        "label": "Costas (backstroke)",
-        "cycle_mode": "alternate",
-        "min_cycle_s": 0.6,
-        "rot_band": (35.0, 45.0, "SLF"),   # graus por lado
-        "head_std_max": 8.0,               # HEURÍSTICO (px normalizados)
-        "sr_band": None,                   # sem faixa citada: só reporta
-        "trunk_max": None,
+        "cotovelo_min": {"valor": 80.0, "unidade": "graus",
+                         "fonte": "Vanderbilt YSJ 2025",
+                         "descricao": "Ângulo mínimo do cotovelo na recuperação (alto cotovelo)"},
+        "cotovelo_max": {"valor": 100.0, "unidade": "graus",
+                         "fonte": "Vanderbilt YSJ 2025",
+                         "descricao": "Ângulo máximo do cotovelo na recuperação"},
+        "cadencia_min": {"valor": 55.0, "unidade": "cpm",
+                         "fonte": "Triathlete (elite 55–100 cpm)",
+                         "descricao": "Cadência mínima de braçadas por lado"},
+        "cadencia_max": {"valor": 75.0, "unidade": "cpm",
+                         "fonte": "Triathlete (elite 55–100 cpm)",
+                         "descricao": "Cadência máxima de braçadas por lado (não-sprint)"},
+        "tronco_max": {"valor": 20.0, "unidade": "graus",
+                       "fonte": "SwimSmart (cabeça neutra)",
+                       "descricao": "Inclinação máxima do tronco (ombro–quadril vs. vertical)"},
+        "simetria_min": {"valor": 0.80, "unidade": "razão",
+                         "fonte": "HEURÍSTICO",
+                         "descricao": "Razão mínima de rotação entre os lados (1,00 = simétrico)"},
     },
     "peito": {
-        "label": "Peito (breaststroke)",
-        "cycle_mode": "symmetric",      # braços simultâneos -> ciclo conjunto
-        "min_cycle_s": 1.0,
-        "sec_por_bracada": (1.6, 1.8, "BNB"),
-        "glide_max_pct": 22.0,          # % do ciclo em deslize, fonte GLI
-        "trunk_max": 20.0,              # HEURÍSTICO (mesma lógica do SWI)
+        "ciclo_min": {"valor": 1.6, "unidade": "s/ciclo",
+                      "fonte": "SwimNow (referência 200 m)",
+                      "descricao": "Duração mínima do ciclo de braçada (deslize completo)"},
+        "ciclo_max": {"valor": 1.8, "unidade": "s/ciclo",
+                      "fonte": "SwimNow (referência 200 m)",
+                      "descricao": "Duração máxima do ciclo de braçada"},
+        "deslize_max": {"valor": 22.0, "unidade": "% do ciclo",
+                        "fonte": "SwimSwam (elite ≤22%)",
+                        "descricao": "Fração máxima do ciclo em deslize passivo"},
+        "joelho_flex_max": {"valor": 165.0, "unidade": "graus",
+                            "fonte": "HEURÍSTICO",
+                            "descricao": "Flexão máxima do joelho na recuperação da pernada"},
+        "tronco_max": {"valor": 20.0, "unidade": "graus",
+                       "fonte": "HEURÍSTICO (mesma lógica do crawl)",
+                       "descricao": "Inclinação máxima do tronco entre as respirações"},
+    },
+    "costas": {
+        "rotacao_min": {"valor": 35.0, "unidade": "graus/lado",
+                        "fonte": "Swim Like A Fish / RocketSwim",
+                        "descricao": "Rotação mínima do corpo por lado"},
+        "rotacao_max": {"valor": 45.0, "unidade": "graus/lado",
+                        "fonte": "Swim Like A Fish / RocketSwim",
+                        "descricao": "Rotação máxima do corpo por lado"},
+        "cabeca_osc_max": {"valor": 8.0, "unidade": "% do torso",
+                           "fonte": "HEURÍSTICO",
+                           "descricao": "Oscilação máxima da cabeça (desvio-padrão normalizado)"},
+        "simetria_min": {"valor": 0.80, "unidade": "razão",
+                         "fonte": "HEURÍSTICO",
+                         "descricao": "Razão mínima de rotação entre os lados"},
     },
     "borboleta": {
-        "label": "Borboleta (butterfly)",
-        "cycle_mode": "symmetric",
-        "min_cycle_s": 0.6,
-        "kicks_por_ciclo": (2.0, "USM"),
-        "undulation_min": 0.08,         # HEURÍSTICO: pico-a-pico do quadril
-        "trunk_max": None,              # ondulação é desejável aqui
+        "batidas_alvo": {"valor": 2.0, "unidade": "batidas/ciclo",
+                         "fonte": "USMS / Vasa",
+                         "descricao": "Batidas de golfinho por ciclo de braços"},
+        "batidas_tol": {"valor": 0.5, "unidade": "batidas/ciclo",
+                        "fonte": "HEURÍSTICO",
+                        "descricao": "Tolerância aceita em torno do alvo de batidas"},
+        "ondulacao_min": {"valor": 0.08, "unidade": "× torso",
+                          "fonte": "HEURÍSTICO",
+                          "descricao": "Ondulação mínima do quadril (pico-a-pico / torso)"},
     },
 }
+
+# Metadados estruturais por estilo (não ajustáveis pelo usuário)
+STYLE_META = {
+    "crawl": {"label": "Crawl (freestyle)", "cycle_mode": "alternate", "min_cycle_s": 0.6},
+    "costas": {"label": "Costas (backstroke)", "cycle_mode": "alternate", "min_cycle_s": 0.6},
+    "peito": {"label": "Peito (breaststroke)", "cycle_mode": "symmetric", "min_cycle_s": 1.0},
+    "borboleta": {"label": "Borboleta (butterfly)", "cycle_mode": "symmetric", "min_cycle_s": 0.6},
+}
+
+# Mapa: limiar ajustável (chave plana da tabela) -> posição na cfg interna
+FLAT_TO_CFG = {
+    "crawl": {"cotovelo_min": ("elbow_band", 0), "cotovelo_max": ("elbow_band", 1),
+              "cadencia_min": ("sr_band", 0), "cadencia_max": ("sr_band", 1),
+              "tronco_max": "trunk_max", "simetria_min": "symmetry_min"},
+    "peito": {"ciclo_min": ("sec_por_bracada", 0), "ciclo_max": ("sec_por_bracada", 1),
+              "deslize_max": "glide_max_pct", "joelho_flex_max": "knee_flex_max",
+              "tronco_max": "trunk_max"},
+    "costas": {"rotacao_min": ("rot_band", 0), "rotacao_max": ("rot_band", 1),
+               "cabeca_osc_max": "head_std_max", "simetria_min": "symmetry_min"},
+    "borboleta": {"batidas_alvo": ("kicks_por_ciclo", 0), "batidas_tol": "kicks_tol",
+                  "ondulacao_min": "undulation_min"},
+}
+
+# Rótulo de fonte das faixas internas (mantém a citação no feedback)
+BAND_SRC = {
+    "crawl": {"elbow_band": "VAN", "sr_band": "TRI"},
+    "peito": {"sec_por_bracada": "BNB"},
+    "costas": {"rot_band": "SLF"},
+    "borboleta": {"kicks_por_ciclo": "USM"},
+}
+
+
+def _cfg_from_flat(style, overrides=None):
+    """Monta a cfg interna do estilo a partir da tabela de limiares padrão,
+    aplicando overrides planos {param: valor} quando fornecidos. Sempre cria
+    um dicionário novo (a cfg de uma análise nunca contamina outra)."""
+    if style not in DEFAULT_THRESHOLDS:
+        sys.exit(f"Estilo desconhecido: {style}. Opções: {list(DEFAULT_THRESHOLDS)}")
+    over = overrides or {}
+    cfg = {}
+    for k, info in DEFAULT_THRESHOLDS[style].items():
+        v = float(over.get(k, info["valor"]))
+        alvo = FLAT_TO_CFG[style][k]
+        if isinstance(alvo, tuple):
+            key, idx = alvo
+            cfg.setdefault(key, [None, None])
+            cfg[key][idx] = v
+        else:
+            cfg[alvo] = v
+    for key, src in BAND_SRC.get(style, {}).items():
+        if cfg.get(key) is not None:
+            if key == "kicks_por_ciclo":
+                cfg[key] = (cfg[key][0], src)
+            else:
+                cfg[key] = (cfg[key][0], cfg[key][1], src)
+    for k in ("elbow_band", "sr_band", "rot_band", "kicks_por_ciclo"):
+        cfg.setdefault(k, None)
+    cfg.update(STYLE_META[style])
+    return cfg
+
+
+# cfg padrão derivada da tabela (compatibilidade com o CLI)
+STYLE_CONFIG = {s: _cfg_from_flat(s) for s in DEFAULT_THRESHOLDS}
 
 
 def angle_2d(a, b, c):
@@ -130,11 +206,13 @@ class SwimAnalyzer:
     L_ANKLE, R_ANKLE = 27, 28
     NOSE = 0
 
-    def __init__(self, video_path, style="crawl", show=False, min_visib=0.5):
+    def __init__(self, video_path, style="crawl", show=False, min_visib=0.5,
+                 thresholds=None):
         if style not in STYLE_CONFIG:
             sys.exit(f"Estilo desconhecido: {style}. Opções: {list(STYLE_CONFIG)}")
         self.style = style
-        self.cfg = STYLE_CONFIG[self.style]
+        self.cfg = _cfg_from_flat(style, thresholds)
+        self.limiares_usados = dict(thresholds) if thresholds else {}
         self.cap = cv2.VideoCapture(video_path)
         if not self.cap.isOpened():
             sys.exit(f"Erro: não foi possível abrir {video_path}")
@@ -500,11 +578,14 @@ class SwimAnalyzer:
             k = m.get("batidas_por_ciclo_est")
             if k is not None:
                 lo, src = cfg["kicks_por_ciclo"][0], cfg["kicks_por_ciclo"][1]
-                if abs(k - lo) > 0.5:
-                    fb.append(f"[Batidas] ~{k:.1f} batidas/ciclo ≠ {lo:.0f}: sincronize "
+                tol = cfg.get("kicks_tol", 0.5)
+                if abs(k - lo) > tol:
+                    fb.append(f"[Batidas] ~{k:.1f} batidas/ciclo fora do alvo "
+                              f"{lo:.0f}±{tol:.1f}: sincronize "
                               f"duas batidas por ciclo de braços ({src_ref(src)})")
                 else:
-                    fb.append(f"[Batidas] ~{k:.1f} batidas/ciclo — padrão 2:1 correto ({src_ref(src)})")
+                    fb.append(f"[Batidas] ~{k:.1f} batidas/ciclo — padrão 2:1 correto "
+                              f"({lo:.0f}±{tol:.1f}) ({src_ref(src)})")
             u = m.get("ondulacao_quadril_torso")
             if u is not None:
                 if u < cfg["undulation_min"]:
@@ -528,8 +609,9 @@ class SwimAnalyzer:
         # ---- simetria (alternados)
         r = m.get("simetria_roll_ratio")
         if r is not None:
-            if r < 0.80:
-                fb.append(f"[Simetria] {r:.2f} < 0.80: um lado gira mais que o outro "
+            sim_min = cfg.get("symmetry_min", 0.80)
+            if r < sim_min:
+                fb.append(f"[Simetria] {r:.2f} < {sim_min:.2f}: um lado gira mais que o outro "
                           "(HEURÍSTICO)")
             else:
                 fb.append(f"[Simetria] {r:.2f} — rotação equilibrada (HEURÍSTICO)")
@@ -541,8 +623,11 @@ class SwimAnalyzer:
 
     # ------------------------------------------------------------------ #
     def set_style(self, style):
+        if style not in STYLE_CONFIG:
+            style = "crawl"
         self.style = style
-        self.cfg = STYLE_CONFIG[style]
+        # reconstrói a cfg mantendo os limiares ajustados pelo usuário
+        self.cfg = _cfg_from_flat(style, self.limiares_usados or None)
 
     def timeseries(self):
         ts = {"t": [], "cotovelo_L": [], "cotovelo_R": [],
@@ -664,9 +749,10 @@ class SwimAnalyzer:
                     "Drill 'kick de costas com braços à frente': cabeça neutra "
                     "olhando o fundo e quadril na superfície", S["SWI"])
             r = m.get("simetria_roll_ratio")
-            if r is not None and r < 0.80:
+            if r is not None and r < cfg.get("symmetry_min", 0.80):
+                sim_min = cfg.get("symmetry_min", 0.80)
                 add("Rotação assimétrica entre os lados",
-                    f"razão {r:.2f}", ">= 0.80", None,
+                    f"razão {r:.2f}", f">= {sim_min:.2f}", None,
                     "Drill 6/1/6: 6 batidas de um lado, 1 braçada, 6 batidas do "
                     "outro — para equilibrar a rotação", S["HEU"])
 
@@ -694,10 +780,12 @@ class SwimAnalyzer:
                     "Encurte a fase morta: puxe mais cedo e mantenha velocidade "
                     "contínua (elite limita o deslize a ~22% do ciclo)", S["GLI"])
             k = m.get("flexao_joelho_max_deg")
-            if k is not None and k > 165:
+            k_lim = cfg.get("knee_flex_max", 165.0)
+            if k is not None and k > k_lim:
                 add("Pernada sem flexão suficiente (chicote fraco)",
                     f"flexão máx. {k:.0f}°",
-                    "recuperação com calcanhares próximos dos glúteos", None,
+                    f"recuperação com calcanhares próximos dos glúteos "
+                    f"(flexão < {k_lim:.0f}°)", None,
                     "Drill de pernada segurando a borda: calcanhares sobem até "
                     "os glúteos, joelhos na largura do quadril, pés virados "
                     "para fora no chicote", S["HK"])
@@ -734,17 +822,21 @@ class SwimAnalyzer:
                     "Drill do copo d'água: equilibre um copo na testa nadendo "
                     "costas, olhos para o teto", S["HEU"])
             r = m.get("simetria_roll_ratio")
-            if r is not None and r < 0.80:
+            if r is not None and r < cfg.get("symmetry_min", 0.80):
+                sim_min = cfg.get("symmetry_min", 0.80)
                 add("Rotação assimétrica entre os lados",
-                    f"razão {r:.2f}", ">= 0.80", None,
+                    f"razão {r:.2f}", f">= {sim_min:.2f}", None,
                     "Drill 6/1/6 de costas: segure a rotação de cada lado por 6 "
                     "batidas para equalizar", S["HEU"])
 
         elif self.style == "borboleta":
             k = m.get("batidas_por_ciclo_est")
-            if k is not None and abs(k - 2.0) > 0.5:
-                add("Batidas fora do padrão 2 por ciclo",
-                    f"≈ {k:.1f} batidas/ciclo", "2 batidas por ciclo de braços",
+            alvo = cfg["kicks_por_ciclo"][0]
+            tol = cfg.get("kicks_tol", 0.5)
+            if k is not None and abs(k - alvo) > tol:
+                add("Batidas fora do alvo por ciclo",
+                    f"≈ {k:.1f} batidas/ciclo",
+                    f"{alvo:.0f} ± {tol:.1f} batidas por ciclo de braços",
                     None,
                     "Drill 'golfinho na vertical': uma batida na entrada das "
                     "mãos e outra na saída da água, sincronizadas com a "
@@ -773,7 +865,14 @@ class SwimAnalyzer:
             erros = self.erros(m)
         except Exception:
             erros = []
-        return {"estilo": self.style, "metricas": m,
+        # tabela efetiva de limiares usados (padrão ou ajustados pelo usuário)
+        limiares = {}
+        for k, info in DEFAULT_THRESHOLDS[self.style].items():
+            v = self.limiares_usados.get(k, info["valor"]) if self.limiares_usados \
+                else info["valor"]
+            limiares[k] = {"valor": v, "unidade": info["unidade"],
+                           "fonte": info["fonte"], "descricao": info["descricao"]}
+        return {"estilo": self.style, "metricas": m, "limiares": limiares,
                 "erros": erros, "feedback": fb}
 
 

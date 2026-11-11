@@ -14,6 +14,7 @@ E abrir o endereço indicado (padrão: http://localhost:8501) no navegador.
 """
 
 import io
+import json
 import os
 import sys
 import tempfile
@@ -39,6 +40,7 @@ except Exception:
     st.stop()
 
 STYLE_CONFIG = _sa.STYLE_CONFIG
+DEFAULT_THRESHOLDS = _sa.DEFAULT_THRESHOLDS
 SwimAnalyzer = _sa.SwimAnalyzer
 gerar_pdf = _sa.gerar_pdf
 # getattr blindado: um swim_analyzer.py desatualizado no repositório não
@@ -64,14 +66,15 @@ if "estilo" not in st.session_state:
     st.session_state.estilo = "crawl"
 
 
-def analisar(video_bytes, filename, estilo_sel):
-    """Salva o upload num arquivo temporário e roda o pipeline existente."""
+def analisar(video_bytes, filename, estilo_sel, limiares=None):
+    """Salva o upload num arquivo temporário e roda o pipeline existente.
+    `limiares` são os valores ajustados pelo usuário (None = padrão)."""
     with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1] or ".mp4",
                                      delete=False) as tmp:
         tmp.write(video_bytes)
         caminho = tmp.name
     try:
-        analisador = SwimAnalyzer(caminho, style=estilo_sel)
+        analisador = SwimAnalyzer(caminho, style=estilo_sel, thresholds=limiares)
         n = analisador.process()
         if n == 0:
             st.error("Não foi possível ler nenhum frame desse vídeo. "
@@ -133,14 +136,82 @@ with st.sidebar:
                 "- 10–15 s de nado contínuo, sem virada\n"
                 "- 60 fps; luz frontal (sol de costas para a câmera)")
 
+# --- tabela de limiares ajustáveis por estilo --------------------------------
+st.subheader("2. Ajuste os limiares (opcional)")
+st.caption("A tabela abaixo define os limiares usados na identificação de erros "
+           "para o estilo selecionado. Edite a coluna **valor** conforme o nível "
+           "do nadador — os erros passam a ser avaliados com os valores ajustados.")
+
+_PADRAO = DEFAULT_THRESHOLDS[st.session_state.estilo]
+_KEY_ED = f"limiares_ed_{st.session_state.estilo}"
+if _KEY_ED not in st.session_state:
+    st.session_state[_KEY_ED] = {}
+
+_linhas = []
+for k, info in _PADRAO.items():
+    _linhas.append({
+        "parâmetro": k,
+        "valor": float(st.session_state[_KEY_ED].get(k, info["valor"])),
+        "unidade": info["unidade"],
+        "fonte": info["fonte"],
+        "descrição": info["descricao"],
+    })
+
+_editado = st.data_editor(
+    _linhas,
+    key=f"editor_{st.session_state.estilo}",
+    disabled=("parâmetro", "unidade", "fonte", "descrição"),
+    column_config={
+        "valor": st.column_config.NumberColumn("valor", format="%.2f", step=0.5),
+        "descrição": st.column_config.TextColumn("descrição", width="large"),
+    },
+    num_rows="fixed",
+    hide_index=True,
+    use_container_width=True,
+)
+# st.data_editor retorna DataFrame no app, mas lista simples fora dele
+# (bare mode) — tratar os dois formatos
+_registros = (_editado.to_dict("records")
+              if hasattr(_editado, "to_dict") else list(_editado))
+st.session_state[_KEY_ED] = {r["parâmetro"]: float(r["valor"])
+                             for r in _registros}
+
+_ajustados = {k: v for k, v in st.session_state[_KEY_ED].items()
+              if abs(v - _PADRAO[k]["valor"]) > 1e-9}
+_c1, _c2, _c3 = st.columns(3)
+if _c1.button("↩️ Restaurar padrão deste estilo"):
+    st.session_state[_KEY_ED] = {}
+    st.rerun()
+_exporte = json.dumps(st.session_state[_KEY_ED], ensure_ascii=False, indent=2)
+_c2.download_button("⬇️ Exportar limiares (JSON)", _exporte,
+                    f"limiares_{st.session_state.estilo}.json", "application/json")
+_json_imp = _c3.file_uploader("⬆️ Importar limiares (JSON)", type=["json"],
+                              key=f"imp_{st.session_state.estilo}")
+if _json_imp is not None:
+    try:
+        _imp = json.loads(_json_imp.getvalue().decode("utf-8"))
+        _validos = {k: float(v) for k, v in _imp.items() if k in _PADRAO}
+        st.session_state[_KEY_ED] = _validos
+        st.success(f"{len(_validos)} limiar(es) importado(s) para "
+                   f"{STYLE_CONFIG[st.session_state.estilo]['label']}.")
+        st.rerun()
+    except Exception:
+        st.error("JSON inválido — use o formato exportado pelo botão acima.")
+if _ajustados:
+    st.info("Ajustados (fora do padrão): " + ", ".join(
+        f"**{k}** = {v:g}" for k, v in _ajustados.items()))
+else:
+    st.caption("Todos os limiares estão nos valores padrão.")
+
 # --- upload -------------------------------------------------------------------
-st.subheader("2. Envie o vídeo")
+st.subheader("3. Envie o vídeo")
 arquivo = st.file_uploader("Vídeo do nado", type=["mp4", "mov", "avi", "mkv"])
 
-st.subheader("3. Analise")
+st.subheader("4. Analise")
 if arquivo and st.button("Analisar nado", type="primary"):
     with st.spinner("Processando vídeo (pose por frame + métricas + PDF)..."):
-        res = analisar(arquivo.getvalue(), arquivo.name, st.session_state.estilo)
+        res = analisar(arquivo.getvalue(), arquivo.name, st.session_state.estilo,
+                       limiares=st.session_state.get(_KEY_ED) or None)
     if res:
         st.session_state.resultado = res
 
@@ -153,8 +224,13 @@ if res:
     st.subheader(f"Resultado — estilo: {STYLE_CONFIG[rep['estilo']]['label']}")
     st.metric("Frames analisados", rep["frames_analisados"])
 
-    # --- erros de movimento identificados
+    # --- limiares usados + erros de movimento identificados
     st.subheader("⚠️ Erros de movimento identificados")
+    with st.expander("📋 Limiares usados nesta análise"):
+        st.dataframe([{"parâmetro": k, "valor": v["valor"], "unidade": v["unidade"],
+                       "fonte": v["fonte"], "descrição": v["descricao"]}
+                      for k, v in rep.get("limiares", {}).items()],
+                     hide_index=True, use_container_width=True)
     erros = rep.get("erros", [])
     if erros:
         st.error(f"{len(erros)} erro(s) de movimento encontrado(s) na execução "
