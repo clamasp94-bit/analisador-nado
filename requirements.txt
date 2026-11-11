@@ -4,8 +4,8 @@
 # - Python 3.12 obrigatório (mediapipe não tem wheels para 3.13+)
 streamlit==1.49.1
 mediapipe==0.10.14
-opencv-python-headless==5.0.0.93
-numpy==2.5.4
-reportlab==5.1.0
-matplotlib==3.11.2
 protobuf>=4.25.3,<5
+opencv-python-headless>=4.10,<6
+numpy>=2.0,<3
+reportlab>=4.2
+matplotlib>=3.8

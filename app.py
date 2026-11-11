@@ -16,13 +16,26 @@ import io
 import os
 import sys
 import tempfile
+import traceback
 
 import streamlit as st
 
 # garante que o import do analisador funciona ao rodar `streamlit run`
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from swim_analyzer import STYLE_CONFIG, SwimAnalyzer, VERSION, gerar_pdf  # noqa: E402
+try:
+    from swim_analyzer import STYLE_CONFIG, SwimAnalyzer, VERSION, gerar_pdf  # noqa: E402
+except Exception:
+    # no cloud, um erro aqui aparece cortado nos logs — exibe o traceback
+    # COMPLETO na própria tela para diagnóstico imediato
+    st.set_page_config(page_title="Analisador de Nado — erro de importação")
+    st.error("**Falha ao importar o pipeline `swim_analyzer`.**"
+             "\n\nVerifique se TODOS os arquivos do pacote estão na raiz do "
+             "repositório (app.py, swim_analyzer.py, requirements.txt, "
+             "packages.txt) e se a versão do Python do app é 3.12."
+             "\n\n**Traceback completo:**")
+    st.code(traceback.format_exc())
+    st.stop()
 
 st.set_page_config(page_title="Analisador de Nado", page_icon="🏊", layout="wide")
 
