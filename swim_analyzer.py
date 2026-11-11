@@ -60,7 +60,7 @@ STYLE_CONFIG = {
         "cycle_mode": "alternate",      # braços alternados -> ciclos por lado
         "min_cycle_s": 0.6,
         "elbow_band": (80.0, 100.0, "VAN"),
-        "sr_band": (55.0, 75.0, "TRI (referência elite 55–100 cpm)"),
+        "sr_band": (55.0, 75.0, "TRI"),
         "trunk_max": 20.0,              # graus, fonte SWI
         "symmetry_min": 0.80,           # HEURÍSTICO
     },
@@ -77,7 +77,7 @@ STYLE_CONFIG = {
         "label": "Peito (breaststroke)",
         "cycle_mode": "symmetric",      # braços simultâneos -> ciclo conjunto
         "min_cycle_s": 1.0,
-        "sec_por_bracada": (1.6, 1.8, "BNB (referência 200 m)"),
+        "sec_por_bracada": (1.6, 1.8, "BNB"),
         "glide_max_pct": 22.0,          # % do ciclo em deslize, fonte GLI
         "trunk_max": 20.0,              # HEURÍSTICO (mesma lógica do SWI)
     },
@@ -85,7 +85,7 @@ STYLE_CONFIG = {
         "label": "Borboleta (butterfly)",
         "cycle_mode": "symmetric",
         "min_cycle_s": 0.6,
-        "kicks_por_ciclo": (2.0, "USM/VAS"),
+        "kicks_por_ciclo": (2.0, "USM"),
         "undulation_min": 0.08,         # HEURÍSTICO: pico-a-pico do quadril
         "trunk_max": None,              # ondulação é desejável aqui
     },
@@ -403,13 +403,17 @@ class SwimAnalyzer:
             "HEU": "heurístico (sem fonte externa)",
         }
 
+        def src_ref(key):
+            """Consulta blindada: chave ausente nunca derruba o relatório."""
+            return S.get(key, "fonte não catalogada")
+
         def band_msg(name, v, lo, hi, src, abaixo, acima, ok):
             if v < lo:
-                fb.append(f"[{name}] {v:.1f} < {lo:.1f}: {abaixo} ({S[src]})")
+                fb.append(f"[{name}] {v:.1f} < {lo:.1f}: {abaixo} ({src_ref(src)})")
             elif v > hi:
-                fb.append(f"[{name}] {v:.1f} > {hi:.1f}: {acima} ({S[src]})")
+                fb.append(f"[{name}] {v:.1f} > {hi:.1f}: {acima} ({src_ref(src)})")
             else:
-                fb.append(f"[{name}] {v:.1f} — {ok} ({S[src]})")
+                fb.append(f"[{name}] {v:.1f} — {ok} ({src_ref(src)})")
 
         # ---- cotovelo (crawl / borboleta)
         if "elbow_band" in cfg:
@@ -419,13 +423,13 @@ class SwimAnalyzer:
                 if v is not None:
                     if v < lo:
                         fb.append(f"[Cotovelo {label}] {v:.0f}\u00b0 < {lo:.0f}\u00b0: "
-                                  f"eleve o cotovelo na recuperação ({S[src]})")
+                                  f"eleve o cotovelo na recuperação ({src_ref(src)})")
                     elif v > hi:
                         fb.append(f"[Cotovelo {label}] {v:.0f}\u00b0 > {hi:.0f}\u00b0: "
-                                  f"abaixe levemente — recuperação relaxada e alta ({S[src]})")
+                                  f"abaixe levemente — recuperação relaxada e alta ({src_ref(src)})")
                     else:
                         fb.append(f"[Cotovelo {label}] {v:.0f}\u00b0 na faixa ótima "
-                                  f"{lo:.0f}–{hi:.0f}\u00b0 ({S[src]})")
+                                  f"{lo:.0f}–{hi:.0f}\u00b0 ({src_ref(src)})")
 
         # ---- cadência (por estilo)
         if self.style == "crawl":
@@ -444,25 +448,25 @@ class SwimAnalyzer:
                 if v is not None:
                     if v < lo:
                         fb.append(f"[Cadência {label}] {v:.2f} s/ciclo < {lo:.1f}: "
-                                  f"acelere menos — deixe o deslize completar ({S['BNB']})")
+                                  f"acelere menos — deixe o deslize completar ({src_ref('BNB')})")
                     elif v > hi:
                         fb.append(f"[Cadência {label}] {v:.2f} s/ciclo > {hi:.1f}: "
-                                  f"nado muito lento para 200 m de referência ({S['BNB']})")
+                                  f"nado muito lento para 200 m de referência ({src_ref('BNB')})")
                     else:
                         fb.append(f"[Cadência {label}] {v:.2f} s/ciclo — perto da "
-                                  f"referência de 200 m ({S['BNB']})")
+                                  f"referência de 200 m ({src_ref('BNB')})")
             g = m.get("deslize_med_pct")
             if g is not None:
                 if g > cfg["glide_max_pct"]:
                     fb.append(f"[Deslize] {g:.0f}% do ciclo em deslize > {cfg['glide_max_pct']:.0f}%: "
-                              f"nadadores rápidos limitam o deslize não propulsivo a ~22% ({S['GLI']})")
+                              f"nadadores rápidos limitam o deslize não propulsivo a ~22% ({src_ref('GLI')})")
                 else:
-                    fb.append(f"[Deslize] {g:.0f}% — dentro do padrão de elite ({S['GLI']})")
+                    fb.append(f"[Deslize] {g:.0f}% — dentro do padrão de elite ({src_ref('GLI')})")
             k = m.get("flexao_joelho_max_deg")
             if k is not None:
                 fb.append(f"[Pernada] Flexão máx. do joelho {k:.0f}\u00b0 — alvo: recuperação "
                           f"com calcanhares aos glúteos e joelhos na largura do quadril, "
-                          f"chicote no final ({S['HK']}; sem faixa numérica citada)")
+                          f"chicote no final ({src_ref('HK')}; sem faixa numérica citada)")
 
         elif self.style == "costas":
             v = m.get("rotacao_estimada_deg")
@@ -491,9 +495,9 @@ class SwimAnalyzer:
                 lo, src = cfg["kicks_por_ciclo"][0], cfg["kicks_por_ciclo"][1]
                 if abs(k - lo) > 0.5:
                     fb.append(f"[Batidas] ~{k:.1f} batidas/ciclo ≠ {lo:.0f}: sincronize "
-                              f"duas batidas por ciclo de braços ({S[src]})")
+                              f"duas batidas por ciclo de braços ({src_ref(src)})")
                 else:
-                    fb.append(f"[Batidas] ~{k:.1f} batidas/ciclo — padrão 2:1 correto ({S[src]})")
+                    fb.append(f"[Batidas] ~{k:.1f} batidas/ciclo — padrão 2:1 correto ({src_ref(src)})")
             u = m.get("ondulacao_quadril_torso")
             if u is not None:
                 if u < cfg["undulation_min"]:
@@ -510,9 +514,9 @@ class SwimAnalyzer:
         if t is not None and cfg.get("trunk_max"):
             if t > cfg["trunk_max"]:
                 fb.append(f"[Tronco] {t:.0f}\u00b0 > {cfg['trunk_max']:.0f}\u00b0: quadril 'caído' "
-                          f"— cabeça neutra para subir o quadril ({S['SWI']})")
+                          f"— cabeça neutra para subir o quadril ({src_ref('SWI')})")
             else:
-                fb.append(f"[Tronco] {t:.0f}\u00b0 — boa linha horizontal ({S['SWI']})")
+                fb.append(f"[Tronco] {t:.0f}\u00b0 — boa linha horizontal ({src_ref('SWI')})")
 
         # ---- simetria (alternados)
         r = m.get("simetria_roll_ratio")
