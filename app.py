@@ -128,34 +128,65 @@ if "estilo" not in st.session_state:
 
 def analisar(video_bytes, filename, estilo_sel, limiares=None):
     """Salva o upload num arquivo temporário e roda o pipeline existente.
-    `limiares` são os valores ajustados pelo usuário (None = padrão)."""
+    `limiares` são os valores ajustados pelo usuário (None = padrão).
+    Blindado: funciona com SwimAnalyzer novo (aceita thresholds=) e antigo
+    (sem o parâmetro), e mostra o erro real na tela em vez de derrubar."""
     with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1] or ".mp4",
                                      delete=False) as tmp:
         tmp.write(video_bytes)
         caminho = tmp.name
     try:
-        analisador = SwimAnalyzer(caminho, style=estilo_sel, thresholds=limiares)
-        n = analisador.process()
-        if n == 0:
-            st.error("Não foi possível ler nenhum frame desse vídeo. "
-                     "Confira o formato (MP4/MOV/AVI) e se o arquivo não está corrompido.")
+        import inspect
+        try:
+            aceitos = inspect.signature(SwimAnalyzer).parameters
+        except (TypeError, ValueError):
+            aceitos = {}
+        kwargs = {"style": estilo_sel}
+        if "thresholds" in aceitos:
+            kwargs["thresholds"] = limiares
+        try:
+            analisador = SwimAnalyzer(caminho, **kwargs)
+        except TypeError as e:
+            st.error("**Falha ao construir o analisador** — a assinatura de "
+                     f"`SwimAnalyzer` no repositório não bate com o `app.py`. "
+                     f"Detalhe: `{e}`. Assinatura detectada: "
+                     f"`{inspect.signature(SwimAnalyzer)}`. "
+                     "Substitua **ambos** os arquivos (`app.py` e "
+                     "`swim_analyzer.py`) pelos do pacote mais recente e faça "
+                     "o Commit.")
+            st.code(traceback.format_exc())
             return None
-        rep = analisador.report()
-        rep["video"] = filename
-        rep["frames_analisados"] = n
-        rep["fontes"] = {
-            "cotovelo_crawl": "Vanderbilt YSJ 2025 (80–100°)",
-            "cadencia": "Triathlete (elite 55–100 cpm)",
-            "tronco": "SwimSmart (cabeça neutra)",
-            "peito_cadencia": "SwimNow 1,6–1,8 s/ciclo (200 m)",
-            "peito_deslize": "SwimSwam (elite ≤22% do ciclo)",
-            "peito_pernada": "Human Kinetics (qualitativo)",
-            "costas_rotacao": "Swim Like A Fish / RocketSwim (35–45°/lado)",
-            "borboleta_batidas": "USMS / Vasa (2 por ciclo)",
-            "heuristico": "valores sem fonte externa estão marcados",
-        }
-        ts = analisador.timeseries()
-        keyframes = analisador.keyframes
+        # construtor antigo (sem thresholds=): aplica os limiares como atributo
+        if limiares and "thresholds" not in aceitos:
+            analisador.limiares_usados = dict(limiares)
+        try:
+            n = analisador.process()
+            if n == 0:
+                st.error("Não foi possível ler nenhum frame desse vídeo. "
+                         "Confira o formato (MP4/MOV/AVI) e se o arquivo não está corrompido.")
+                return None
+            rep = analisador.report()
+            rep["video"] = filename
+            rep["frames_analisados"] = n
+            rep["fontes"] = {
+                "cotovelo_crawl": "Vanderbilt YSJ 2025 (80–100°)",
+                "cadencia": "Triathlete (elite 55–100 cpm)",
+                "tronco": "SwimSmart (cabeça neutra)",
+                "peito_cadencia": "SwimNow 1,6–1,8 s/ciclo (200 m)",
+                "peito_deslize": "SwimSwam (elite ≤22% do ciclo)",
+                "peito_pernada": "Human Kinetics (qualitativo)",
+                "costas_rotacao": "Swim Like A Fish / RocketSwim (35–45°/lado)",
+                "borboleta_batidas": "USMS / Vasa (2 por ciclo)",
+                "heuristico": "valores sem fonte externa estão marcados",
+            }
+            ts = analisador.timeseries()
+            keyframes = analisador.keyframes
+        except Exception:
+            # qualquer falha nos passos de análise mostra o traceback completo
+            # na tela (no cloud, os logs ficam truncados)
+            st.error("**Falha durante a análise do vídeo.** Traceback completo:")
+            st.code(traceback.format_exc())
+            return None
 
         pdf_buf = io.BytesIO()
         gerar_pdf(rep, keyframes, ts, pdf_buf)
