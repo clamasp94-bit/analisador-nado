@@ -8,7 +8,7 @@ Pipeline: vídeo -> MediaPipe Pose (landmarks 2D) -> segmentação por ciclo
 -> relatório (console + JSON).
 
 Uso:
-    python swim_analyzer.py <video.mp4> [--estilo auto|crawl|peito|costas|borboleta]
+    python swim_analyzer.py <video.mp4> [--estilo crawl|peito|costas|borboleta]
                             [--exibir] [--saida relatorio.json] [--pdf relatorio.pdf]
 
 Dependências: pip install mediapipe==0.10.14 opencv-python numpy reportlab matplotlib
@@ -35,7 +35,7 @@ except ImportError:
 
 # Versão do pipeline — exibida na barra lateral do app; o valor no ar
 # confirma qual código está realmente rodando no Streamlit Cloud.
-VERSION = "v7-apt-fix"
+VERSION = "v8-selecao-estilo"
 
 
 # ----------------------------------------------------------------------------
@@ -131,9 +131,9 @@ class SwimAnalyzer:
     NOSE = 0
 
     def __init__(self, video_path, style="crawl", show=False, min_visib=0.5):
-        if style not in ("auto", *STYLE_CONFIG):
-            sys.exit(f"Estilo desconhecido: {style}. Opções: auto, {list(STYLE_CONFIG)}")
-        self.style = style if style != "auto" else "crawl"   # provisório até detectar
+        if style not in STYLE_CONFIG:
+            sys.exit(f"Estilo desconhecido: {style}. Opções: {list(STYLE_CONFIG)}")
+        self.style = style
         self.cfg = STYLE_CONFIG[self.style]
         self.cap = cv2.VideoCapture(video_path)
         if not self.cap.isOpened():
@@ -566,70 +566,198 @@ class SwimAnalyzer:
                     break
         return float(np.median(vals)) if vals else None
 
-    def detect_style(self):
-        """Autodetecção por heurísticas explicáveis (vista lateral 2D):
-        1) sincronia dos braços — correlação entre trajetórias y dos punhos
-           (positiva = braços simultâneos: peito/borboleta; negativa =
-           alternados: crawl/costas);
-        2) orientação do corpo — nariz acima da linha dos ombros, em px
-           normalizados pelo torso (positivo = supino: costas);
-        3) ondulação do quadril — pico-a-pico vertical do quadril / torso
-           (alta na borboleta, baixa no peito).
-        Confiança = margem entre os dois escores mais altos (0–1);
-        se a margem < 0,15, mantém crawl e sinaliza fallback."""
-        torso = self._torso_len() or 1.0
-
-        # sinal 1: sincronia dos braços
-        L = [f["punho"]["L"][1] for f in self.frames if f["punho"]["L"]]
-        R = [f["punho"]["R"][1] for f in self.frames if f["punho"]["R"]]
-        corr = 0.0
-        if len(L) > 10 and len(R) > 10:
-            n = min(len(L), len(R))
-            lv, rv = np.array(L[:n]), np.array(R[:n])
-            if lv.std() > 1e-6 and rv.std() > 1e-6:
-                corr = float(np.corrcoef(lv, rv)[0, 1])
-        sync = math.tanh(corr / 0.6)          # -1 alternado … +1 simultâneo
-
-        # sinal 2: orientação (nariz vs ombros)
-        sup_vals = []
+    # ------------------------------------------------------------------ #
+    def _tempos_fora(self, sinal, fora):
+        """Tempos (s) dos frames em que o sinal viola a condição `fora(v)`.
+        Usado para localizar o momento aproximado do erro no vídeo."""
+        ts = []
         for f in self.frames:
-            nose = f["nose"]
-            sho = f["ombro"]["L"] or f["ombro"]["R"]
-            if nose and sho and nose[2] >= self.min_visib:
-                sup_vals.append((sho[1] - nose[1]) / torso)
-        supine_norm = float(np.mean(sup_vals)) if sup_vals else 0.0
-        sup = math.tanh(supine_norm / 0.3)    # -1 prono … +1 supino
+            v = sinal(f)
+            if v is None or (isinstance(v, float) and math.isnan(v)):
+                continue
+            if fora(v):
+                ts.append(f["t"])
+        return ts
 
-        # sinal 3: ondulação do quadril
-        hips = [np.mean([f["quadril_pt"][s][1] for s in ("L", "R")
-                         if f["quadril_pt"][s]])
-                for f in self.frames if f["quadril_pt"]["L"] or f["quadril_pt"]["R"]]
-        und = (float(np.ptp(hips)) / torso) if len(hips) >= 4 else 0.0
-        und_n = min(und / 0.15, 1.0)          # 0..1 normalizado
-
-        scores = {
-            "crawl": 0.5 * (1 - sync) + 0.5 * (1 - sup),
-            "costas": 0.5 * (1 - sync) + 0.5 * sup,
-            "borboleta": 0.5 * (1 + sync) + 0.5 * und_n,
-            "peito": 0.5 * (1 + sync) + 0.5 * (1 - und_n),
-        }
-        ranked = sorted(scores.items(), key=lambda kv: -kv[1])
-        best, second = ranked[0], ranked[1]
-        margin = max(0.0, min(1.0, best[1] - second[1]))
-        fallback = margin < 0.15
-        if fallback:
-            best = ("crawl", scores["crawl"])
+    def _fontes(self):
         return {
-            "estilo": best[0],
-            "confianca": round(margin, 2),
-            "fallback": fallback,
-            "escores": {k: round(v, 2) for k, v in scores.items()},
-            "sinais": {
-                "sincronia_bracos_corr": round(corr, 2),
-                "orientacao_supino_norm": round(supine_norm, 2),
-                "ondulacao_quadril_torso": round(und, 2),
-            },
+            "VAN": "[Vanderbilt YSJ 2025](https://www.vanderbilt.edu/youngscientistjournal/article/swimming-stroke-analysis-and-technique-improvement-via-pose-estimation/)",
+            "TRI": "[Triathlete](https://www.triathlete.com/training/what-is-the-ideal-stroke-rate/)",
+            "SWI": "[SwimSmart](https://www.swimsmarttoday.com/blogs/swimsmart-blog/how-head-position-controls-your-entire-body-alignment-in-swimming)",
+            "BNB": "[SwimNow](https://www.swimnow.co.uk/learn-to-swim/the-breaststroke-blueprint/)",
+            "GLI": "[SwimSwam](https://swimswam.com/physiological-proof-promoting-a-long-glide-in-breaststroke-decrea/)",
+            "SLF": "[Swim Like A Fish](https://swimlikeafish.org/mastering-backstroke-rotation-drills/)",
+            "USM": "[USMS](https://www.usms.org/fitness-and-training/guides/butterfly/kick)",
+            "HK": "[Human Kinetics](https://us.humankinetics.com/blogs/excerpt/correct-form-for-the-breaststroke)",
+            "HEU": "HEURÍSTICO (sem fonte externa citada)",
         }
+
+    def erros(self, m):
+        """Erros de movimento estruturados por estilo. Cada item traz o que
+        foi medido, o limiar de referência, o momento aproximado do vídeo em
+        que ocorre (quando localizável frame a frame) e um drill de correção.
+        Limiares marcados HEURÍSTICO não têm fonte externa citada."""
+        cfg = self.cfg
+        S = self._fontes()
+        E = []
+
+        def add(titulo, medido, limiar, tempos, drill, fonte):
+            E.append({
+                "titulo": titulo,
+                "medido": medido,
+                "limiar": limiar,
+                "quando_s": round(float(np.median(tempos)), 1) if tempos else None,
+                "drill": drill,
+                "fonte": fonte,
+            })
+
+        def ang_tronco(f):
+            for s in ("L", "R"):
+                sho, hip = f["ombro"][s], f["quadril_pt"][s]
+                if sho and hip:
+                    return angle_2d((sho[0], sho[1]), (hip[0], hip[1]),
+                                    (hip[0], hip[1] - 10))
+            return None
+
+        if self.style == "crawl":
+            lo, hi, _ = cfg["elbow_band"]
+            for side, label in (("L", "esquerdo"), ("R", "direito")):
+                v = m.get(f"cotovelo_med_{label}")
+                if v is None:
+                    continue
+                if v < lo:
+                    add(f"Cotovelo {label} baixo demais na recuperação",
+                        f"mediana {v:.0f}°", f"{lo:.0f}–{hi:.0f}° (ótimo ~90°)",
+                        self._tempos_fora(lambda f: f["cotovelo"][side],
+                                          lambda x: x < lo),
+                        "Drill 'dedos arrastando a água': passe as pontas dos "
+                        "dedos raspando a superfície durante toda a recuperação "
+                        "para fixar o cotovelo alto", S["VAN"])
+                elif v > hi:
+                    add(f"Cotovelo {label} rígido/estendido na recuperação",
+                        f"mediana {v:.0f}°", f"{lo:.0f}–{hi:.0f}° (ótimo ~90°)",
+                        self._tempos_fora(lambda f: f["cotovelo"][side],
+                                          lambda x: x > hi),
+                        "Drill 'braço de pano': recupere o braço totalmente "
+                        "relaxado, deixando o antebraço pendurar do cotovelo",
+                        S["VAN"])
+            lo_s, hi_s, _ = cfg["sr_band"]
+            for side, label in (("esquerdo", "esquerda"), ("direito", "direita")):
+                v = m.get(f"cadencia_{side}_cpm")
+                if v is None:
+                    continue
+                if v < lo_s:
+                    add(f"Cadência {label} baixa",
+                        f"{v:.0f} cpm", f"{lo_s:.0f}–{hi_s:.0f} cpm", None,
+                        "Progressão de cadência: 4×25 m subindo a cadência "
+                        "gradualmente sem encurtar a braçada", S["TRI"])
+                elif v > hi_s:
+                    add(f"Cadência {label} alta (braçada curta)",
+                        f"{v:.0f} cpm", f"{lo_s:.0f}–{hi_s:.0f} cpm", None,
+                        "Golf de nado (SWOLF): conte as braçadas por comprimento "
+                        "e busque reduzir o total mantendo o tempo", S["TRI"])
+            t = m.get("tronco_med_deg")
+            if t is not None and t > cfg["trunk_max"]:
+                add("Tronco inclinado (quadril 'caído')",
+                    f"mediana {t:.0f}°", f"<= {cfg['trunk_max']:.0f}°",
+                    self._tempos_fora(ang_tronco, lambda x: x > cfg["trunk_max"]),
+                    "Drill 'kick de costas com braços à frente': cabeça neutra "
+                    "olhando o fundo e quadril na superfície", S["SWI"])
+            r = m.get("simetria_roll_ratio")
+            if r is not None and r < 0.80:
+                add("Rotação assimétrica entre os lados",
+                    f"razão {r:.2f}", ">= 0.80", None,
+                    "Drill 6/1/6: 6 batidas de um lado, 1 braçada, 6 batidas do "
+                    "outro — para equilibrar a rotação", S["HEU"])
+
+        elif self.style == "peito":
+            lo, hi, _ = cfg["sec_por_bracada"]
+            for side, label in (("esquerdo", "esquerda"), ("direito", "direita")):
+                v = m.get(f"seg_por_ciclo_{side}")
+                if v is None:
+                    continue
+                if v < lo:
+                    add(f"Ciclo {label} apressado (deslize curto)",
+                        f"{v:.2f} s/ciclo", f"{lo:.1f}–{hi:.1f} s/ciclo", None,
+                        "Drill '2 kicks 1 braçada': complete a extensão em "
+                        "streamline antes da próxima braçada", S["BNB"])
+                elif v > hi:
+                    add(f"Ciclo {label} lento demais",
+                        f"{v:.2f} s/ciclo", f"{lo:.1f}–{hi:.1f} s/ciclo", None,
+                        "Reduza o deslize passivo: inicie a tração assim que a "
+                        "velocidade começar a cair", S["BNB"])
+            g = m.get("deslize_med_pct")
+            if g is not None and g > cfg["glide_max_pct"]:
+                add("Deslize passivo longo demais no ciclo",
+                    f"{g:.0f}% do ciclo", f"<= {cfg['glide_max_pct']:.0f}%",
+                    None,
+                    "Encurte a fase morta: puxe mais cedo e mantenha velocidade "
+                    "contínua (elite limita o deslize a ~22% do ciclo)", S["GLI"])
+            k = m.get("flexao_joelho_max_deg")
+            if k is not None and k > 165:
+                add("Pernada sem flexão suficiente (chicote fraco)",
+                    f"flexão máx. {k:.0f}°",
+                    "recuperação com calcanhares próximos dos glúteos", None,
+                    "Drill de pernada segurando a borda: calcanhares sobem até "
+                    "os glúteos, joelhos na largura do quadril, pés virados "
+                    "para fora no chicote", S["HK"])
+            t = m.get("tronco_med_deg")
+            if t is not None and t > cfg["trunk_max"]:
+                add("Tronco inclinado (quadril 'caído')",
+                    f"mediana {t:.0f}°", f"<= {cfg['trunk_max']:.0f}°",
+                    self._tempos_fora(ang_tronco, lambda x: x > cfg["trunk_max"]),
+                    "Ao respirar, o queixo desliza à frente sem levantar o "
+                    "tronco — cabeça neutra entre as braçadas", S["SWI"])
+
+        elif self.style == "costas":
+            v = m.get("rotacao_estimada_deg")
+            if v is not None:
+                lo, hi, _ = cfg["rot_band"]
+                if v < lo:
+                    add("Rotação do corpo fraca",
+                        f"≈ {v:.0f}° por lado", f"{lo:.0f}–{hi:.0f}° por lado",
+                        None,
+                        "Drill '6 kicks por lado': nade de costas rotacionado e "
+                        "segure a posição antes de girar para o outro lado",
+                        S["SLF"])
+                elif v > hi:
+                    add("Rotação do corpo exagerada",
+                        f"≈ {v:.0f}° por lado", f"{lo:.0f}–{hi:.0f}° por lado",
+                        None,
+                        "Gire como um tronco rígido, não role: os quadris "
+                        "acompanham os ombros sem passar da vertical", S["SLF"])
+            h = m.get("cabeca_std_norm")
+            if h is not None and h > cfg["head_std_max"]:
+                add("Cabeça oscilando (alinhamento instável)",
+                    f"oscilação {h:.1f}% do torso",
+                    f"<= {cfg['head_std_max']:.0f}%", None,
+                    "Drill do copo d'água: equilibre um copo na testa nadendo "
+                    "costas, olhos para o teto", S["HEU"])
+            r = m.get("simetria_roll_ratio")
+            if r is not None and r < 0.80:
+                add("Rotação assimétrica entre os lados",
+                    f"razão {r:.2f}", ">= 0.80", None,
+                    "Drill 6/1/6 de costas: segure a rotação de cada lado por 6 "
+                    "batidas para equalizar", S["HEU"])
+
+        elif self.style == "borboleta":
+            k = m.get("batidas_por_ciclo_est")
+            if k is not None and abs(k - 2.0) > 0.5:
+                add("Batidas fora do padrão 2 por ciclo",
+                    f"≈ {k:.1f} batidas/ciclo", "2 batidas por ciclo de braços",
+                    None,
+                    "Drill 'golfinho na vertical': uma batida na entrada das "
+                    "mãos e outra na saída da água, sincronizadas com a "
+                    "respiração", S["USM"])
+            u = m.get("ondulacao_quadril_torso")
+            if u is not None and u < cfg["undulation_min"]:
+                add("Ondulação do corpo fraca",
+                    f"{u:.2f}× torso (pico-a-pico)",
+                    f">= {cfg['undulation_min']:.2f}× torso", None,
+                    "Drill de golfinho submerso: propague a onda da cabeça até "
+                    "os pés com o corpo inteiro, sem braços", S["HEU"])
+
+        return E
 
     def report(self):
         m = self.metrics()
@@ -641,7 +769,12 @@ class SwimAnalyzer:
             # um problema isolado no feedback não pode derrubar o relatório todo
             fb = ["(feedback indisponível para este vídeo — consulte as métricas "
                   "acima; se persistir, relate o erro com o traceback)"]
-        return {"estilo": self.style, "metricas": m, "feedback": fb}
+        try:
+            erros = self.erros(m)
+        except Exception:
+            erros = []
+        return {"estilo": self.style, "metricas": m,
+                "erros": erros, "feedback": fb}
 
 
 def gerar_pdf(rep, keyframes, ts, out_path):
@@ -680,19 +813,12 @@ def gerar_pdf(rep, keyframes, ts, out_path):
     body = ParagraphStyle("body", fontName=font_name, fontSize=9.5, leading=13)
 
     story = [Paragraph("Relatório de Análise de Nado", h1)]
-    det = rep.get("autodeteccao")
     meta = [
         ["Vídeo", os.path.basename(rep.get("video", ""))],
         ["Estilo analisado", STYLE_CONFIG[rep["estilo"]]["label"]],
         ["Frames", str(rep["frames_analisados"])],
         ["Duração", f"{rep['metricas'].get('duracao_s', 0)} s"],
     ]
-    if det:
-        meta.append(["Autodetectado", f"confiança {det['confianca']:.2f}"])
-        meta.append(["Escores", ", ".join(f"{k} {v:.2f}"
-                    for k, v in det["escores"].items())])
-        if det["fallback"]:
-            meta.append(["Aviso", "confiança baixa — estilo padrão (crawl) aplicado"])
     t = Table(meta, colWidths=[4 * cm, 12 * cm])
     t.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, -1), font_name),
@@ -711,7 +837,16 @@ def gerar_pdf(rep, keyframes, ts, out_path):
     ]))
     story.append(mt)
 
-    story.append(Paragraph("Feedback", h2))
+    story.append(Paragraph("Erros de movimento identificados", h2))
+    for e in rep.get("erros", []):
+        quando = (f" (ocorre em ~{e['quando_s']:.1f} s)"
+                  if e.get("quando_s") is not None else "")
+        story.append(Paragraph(
+            f"• {e['titulo']}{quando} — medido: {e['medido']}; "
+            f"limiar: {e['limiar']}. Correção: {e['drill']} "
+            f"[{strip_md(e['fonte'])}]", body))
+
+    story.append(Paragraph("Feedback resumido", h2))
     for line in rep["feedback"]:
         story.append(Paragraph("• " + strip_md(line), body))
 
@@ -769,8 +904,8 @@ def main():
     ap = argparse.ArgumentParser(
         description="Analisador de nado (crawl/peito/costas/borboleta, vista lateral)")
     ap.add_argument("video", help="arquivo de vídeo (.mp4/.mov/.avi)")
-    ap.add_argument("--estilo", default="auto", choices=["auto", *STYLE_CONFIG],
-                    help="estilo do nado; 'auto' detecta automaticamente (padrão)")
+    ap.add_argument("--estilo", default="crawl", choices=list(STYLE_CONFIG),
+                    help="estilo do nado a ser analisado")
     ap.add_argument("--exibir", action="store_true", help="mostrar janela com overlay")
     ap.add_argument("--saida", help="salvar relatório em JSON")
     ap.add_argument("--pdf", help="gerar relatório em PDF com gráficos e frames-chave")
@@ -779,17 +914,7 @@ def main():
     an = SwimAnalyzer(args.video, style=args.estilo, show=args.exibir)
     n = an.process()
 
-    det = None
-    if args.estilo == "auto":
-        det = an.detect_style()
-        an.set_style(det["estilo"])
-        if det["fallback"]:
-            print(f"\n[AVISO] Confiança baixa na detecção ({det['confianca']:.2f}); "
-                  f"usando '{det['estilo']}' como padrão.")
-
     rep = an.report()
-    if det:
-        rep["autodeteccao"] = det
     rep["video"] = args.video
     rep["frames_analisados"] = n
     rep["fontes"] = {
@@ -807,11 +932,11 @@ def main():
     print(f"\n=== RELATÓRIO DE NADO ({rep['estilo']}) — {args.video} ===")
     print(f"Estilo: {an.cfg['label']} | Frames: {n} "
           f"({rep['metricas'].get('duracao_s', 0)} s @ {an.fps:.0f} fps)")
-    if det:
-        print(f"Autodetecção: {det['estilo']} (confiança {det['confianca']:.2f}, "
-              f"fallback={det['fallback']})")
-        print(f"  sinais: {det['sinais']}")
-        print(f"  escores: {det['escores']}")
+    print("\nErros de movimento identificados:")
+    for e in rep.get("erros", []):
+        q = f" (≈ {e['quando_s']:.1f} s)" if e.get("quando_s") is not None else ""
+        print(f"  - {e['titulo']}{q} | medido {e['medido']} | limiar {e['limiar']}")
+        print(f"      correção: {e['drill']}")
     print("Métricas:")
     for k, v in rep["metricas"].items():
         print(f"  {k:30s} {v}")

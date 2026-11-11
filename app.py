@@ -4,8 +4,9 @@
 App de Análise de Nado — Streamlit
 ==================================
 UI web que empacota o analisador existente (swim_analyzer.py), sem reescrever
-a lógica: upload de vídeo -> autodetecção de estilo -> métricas + feedback
--> download do relatório em PDF e JSON.
+a lógica: o usuário seleciona o estilo com botões, envia o vídeo, e o app
+identifica erros de movimento (com limiar, momento do vídeo e drill de
+correção), além de gerar o relatório em PDF e JSON.
 
 Executar:
     streamlit run app.py
@@ -49,15 +50,18 @@ st.set_page_config(page_title="Analisador de Nado", page_icon="🏊", layout="wi
 
 st.title("🏊 Analisador de Nado")
 st.caption(
-    "Envie um vídeo com vista lateral (câmera fixa, 60 fps recomendado). "
-    "O app detecta o estilo (crawl, peito, costas ou borboleta), calcula "
-    "métricas e gera o relatório em PDF. Valores marcados como HEURÍSTICO "
-    "não têm fonte externa citada."
+    "Selecione o estilo, envie um vídeo com vista lateral (câmera fixa, "
+    "60 fps recomendado) e o app identifica erros de movimento na execução — "
+    "cada erro vem com o limiar de referência, o momento aproximado do vídeo "
+    "em que ocorre e um drill de correção. O relatório em PDF reúne tudo. "
+    "Valores marcados como HEURÍSTICO não têm fonte externa citada."
 )
 
 # --- estado do resultado entre interações -----------------------------------
 if "resultado" not in st.session_state:
     st.session_state.resultado = None
+if "estilo" not in st.session_state:
+    st.session_state.estilo = "crawl"
 
 
 def analisar(video_bytes, filename, estilo_sel):
@@ -73,13 +77,7 @@ def analisar(video_bytes, filename, estilo_sel):
             st.error("Não foi possível ler nenhum frame desse vídeo. "
                      "Confira o formato (MP4/MOV/AVI) e se o arquivo não está corrompido.")
             return None
-        det = None
-        if estilo_sel == "auto":
-            det = analisador.detect_style()
-            analisador.set_style(det["estilo"])
         rep = analisador.report()
-        if det:
-            rep["autodeteccao"] = det
         rep["video"] = filename
         rep["frames_analisados"] = n
         rep["fontes"] = {
@@ -106,18 +104,28 @@ def analisar(video_bytes, filename, estilo_sel):
         os.unlink(caminho)
 
 
+# --- seleção do estilo (botões) ----------------------------------------------
+st.subheader("1. Selecione o estilo do nado")
+ROTULOS = {
+    "crawl": "🏊‍♂️ Crawl (Livre)",
+    "peito": "🐸 Peito",
+    "costas": "🏊‍♀️ Costas",
+    "borboleta": "🦋 Borboleta",
+}
+cols = st.columns(4)
+for i, key in enumerate(("crawl", "peito", "costas", "borboleta")):
+    if cols[i].button(ROTULOS[key],
+                      use_container_width=True,
+                      type="primary" if st.session_state.estilo == key else "secondary"):
+        st.session_state.estilo = key
+if st.session_state.estilo in STYLE_CONFIG:
+    st.success(f"Estilo selecionado: **{STYLE_CONFIG[st.session_state.estilo]['label']}**"
+               " — os erros de movimento serão avaliados com os limiares deste estilo.")
+
 # --- barra lateral -----------------------------------------------------------
 with st.sidebar:
     st.header("Configurações")
     st.caption(f"Pipeline {VERSION}")
-    estilo_sel = st.selectbox(
-        "Estilo do nado",
-        ["auto", *STYLE_CONFIG],
-        format_func=lambda s: "Detectar automaticamente" if s == "auto" else STYLE_CONFIG[s]["label"],
-        help="Em 'auto', o estilo é detectado por heurísticas explicáveis "
-             "(sincronia dos braços, orientação do corpo e ondulação do quadril); "
-             "confiança baixa (< 0,15) cai para crawl com aviso.",
-    )
     st.divider()
     st.markdown("**Protocolo de filmagem recomendado**\n"
                 "- Vista lateral, câmera fixa no tripé\n"
@@ -126,11 +134,13 @@ with st.sidebar:
                 "- 60 fps; luz frontal (sol de costas para a câmera)")
 
 # --- upload -------------------------------------------------------------------
+st.subheader("2. Envie o vídeo")
 arquivo = st.file_uploader("Vídeo do nado", type=["mp4", "mov", "avi", "mkv"])
 
+st.subheader("3. Analise")
 if arquivo and st.button("Analisar nado", type="primary"):
     with st.spinner("Processando vídeo (pose por frame + métricas + PDF)..."):
-        res = analisar(arquivo.getvalue(), arquivo.name, estilo_sel)
+        res = analisar(arquivo.getvalue(), arquivo.name, st.session_state.estilo)
     if res:
         st.session_state.resultado = res
 
@@ -140,27 +150,29 @@ if res:
     m = rep["metricas"]
 
     # --- cabeçalho do resultado
-    det = rep.get("autodeteccao")
-    if det:
-        cor = "orange" if det["fallback"] else "green"
-        icon = "⚠️" if det["fallback"] else "✅"
-        st.subheader(f"{icon} Estilo detectado: {STYLE_CONFIG[det['estilo']]['label']}")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Confiança", f"{det['confianca']:.2f}")
-        c2.metric("Fallback p/ crawl", "sim" if det["fallback"] else "não")
-        c3.metric("Frames analisados", rep["frames_analisados"])
-        with st.expander("Como a detecção funcionou (sinais e escores)"):
-            st.write("**Sinais brutos:**")
-            st.json(det["sinais"])
-            st.write("**Escores por estilo:**")
-            st.bar_chart({k: [v] for k, v in det["escores"].items()})
-            if det["fallback"]:
-                st.warning("Confiança baixa: os sinais não discriminaram bem o "
-                           "estilo. O relatório usa crawl como padrão — se souber "
-                           "o estilo, selecione-o na barra lateral.")
+    st.subheader(f"Resultado — estilo: {STYLE_CONFIG[rep['estilo']]['label']}")
+    st.metric("Frames analisados", rep["frames_analisados"])
+
+    # --- erros de movimento identificados
+    st.subheader("⚠️ Erros de movimento identificados")
+    erros = rep.get("erros", [])
+    if erros:
+        st.error(f"{len(erros)} erro(s) de movimento encontrado(s) na execução "
+                 "— corrija com os drills sugeridos:")
+        for i, e in enumerate(erros, 1):
+            quando = (f" — ocorre em ~{e['quando_s']:.1f} s do vídeo"
+                      if e.get("quando_s") is not None else "")
+            with st.expander(f"{i}. {e['titulo']}{quando}", expanded=(i == 1)):
+                c1, c2 = st.columns(2)
+                c1.metric("O que foi medido", e["medido"])
+                c2.metric("Limiar de referência", e["limiar"])
+                st.markdown(f"**Como corrigir (drill):** {e['drill']}")
+                st.markdown(f"**Fonte do limiar:** {e['fonte']}")
     else:
-        st.subheader(f"Estilo analisado: {STYLE_CONFIG[rep['estilo']]['label']}")
-        st.metric("Frames analisados", rep["frames_analisados"])
+        st.success("Nenhum erro de movimento identificado com os limiares atuais "
+                   "— os movimentos medidos estão dentro das faixas de referência "
+                   "(ou os frames válidos foram insuficientes para medir; veja as "
+                   "métricas abaixo).")
 
     # --- métricas
     st.subheader("Métricas")
@@ -172,8 +184,8 @@ if res:
     with st.expander("Todas as métricas (incl. não numéricas)"):
         st.json(m)
 
-    # --- feedback
-    st.subheader("Feedback")
+    # --- feedback resumido
+    st.subheader("Feedback resumido")
     for linha in rep["feedback"]:
         st.markdown(f"- {linha}")
 
