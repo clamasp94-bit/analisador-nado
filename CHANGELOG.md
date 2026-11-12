@@ -47,3 +47,20 @@
 ## v5/v6
 - Correção `TypeError` do JSON (`StringIO`), sanitização de NaN, feedback
   blindado, traceback completo na tela em caso de falha de importação.
+
+## v12-nadador-email (2026-11-11)
+
+### Novo
+- Campo **Nome do nadador** e campo **E-mail do nadador** (passo 3 do app,
+  opcional; e-mail validado por regex).
+- Nome e e-mail entram no **cabeçalho do PDF** (linhas "Nadador" e "E-mail"
+  na tabela de metadados) — verificado com nome acentuado
+  ("José d'Ângelo ção") extraído com pdftotext.
+- Botão **📧 Enviar relatório por e-mail**: SMTP (smtplib + EmailMessage,
+  stdlib) com o PDF anexado; destinatário pré-preenchido com o e-mail do
+  nadador (editável); credenciais lidas de `st.secrets[smtp]` — nunca no
+  código; suporta tls=starttls/ssl; mensagens claras quando secrets ausentes
+  ou senha recusada (Gmail pede senha de app).
+- `secrets.toml.example` incluído no pacote; seção de configuração no README.
+- Fluxo do app renumerado: 1 estilo → 2 limiares → 3 dados do nadador →
+  4 vídeo → 5 analisar; downloads + envio de e-mail no final.

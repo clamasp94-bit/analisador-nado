@@ -1,7 +1,31 @@
 # 🏊 Analisador de Nado — Deploy no Streamlit Community Cloud
 
 App web que analisa vídeos de natação nos 4 estilos (crawl, peito, costas,
-borboleta), detecta o estilo automaticamente e gera relatório em PDF.
+borboleta) com **estilo selecionado por botões**, tabela de **limiares
+ajustáveis**, identificação de **erros de movimento** (limiar, momento do
+vídeo e drill de correção), campos de **nome e e-mail do nadador** no
+relatório e **envio do PDF por e-mail**.
+
+## 📧 Envio do relatório por e-mail (configuração do dono do app)
+
+O botão de envio usa SMTP com credenciais lidas de `st.secrets` — nunca no
+código. Configure em **Settings → Secrets** no Streamlit Cloud (ou no arquivo
+`.streamlit/secrets.toml` local), seguindo o modelo `secrets.toml.example`:
+
+```toml
+[smtp]
+host = "smtp.gmail.com"
+port = 587
+user = "seuemail@gmail.com"
+password = "senha-de-app-de-16-caracteres"
+remetente = "Analisador de Nado <seuemail@gmail.com>"
+```
+
+**Gmail:** ative a verificação em duas etapas e gere uma **senha de app**
+(myaccount.google.com/apppasswords) — a senha normal da conta **não** funciona
+(`SMTPAuthenticationError`). Outros provedores: ajuste host/porta (Outlook:
+`smtp.office365.com:587`; Yahoo: `smtp.mail.yahoo.com:587`). Sem os secrets,
+o app mostra orientação na tela — nada quebra.
 
 ## ⚠️ Configuração crítica
 

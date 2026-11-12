@@ -35,7 +35,7 @@ except ImportError:
 
 # Versão do pipeline — exibida na barra lateral do app; o valor no ar
 # confirma qual código está realmente rodando no Streamlit Cloud.
-VERSION = "v11-chamada-blindada"
+VERSION = "v12-nadador-email"
 
 
 # ----------------------------------------------------------------------------
@@ -912,7 +912,12 @@ def gerar_pdf(rep, keyframes, ts, out_path):
     body = ParagraphStyle("body", fontName=font_name, fontSize=9.5, leading=13)
 
     story = [Paragraph("Relatório de Análise de Nado", h1)]
-    meta = [
+    meta = []
+    if rep.get("nadador"):
+        meta.append(["Nadador", rep["nadador"]])
+    if rep.get("email"):
+        meta.append(["E-mail", rep["email"]])
+    meta += [
         ["Vídeo", os.path.basename(rep.get("video", ""))],
         ["Estilo analisado", STYLE_CONFIG[rep["estilo"]]["label"]],
         ["Frames", str(rep["frames_analisados"])],

@@ -16,6 +16,7 @@ E abrir o endereço indicado (padrão: http://localhost:8501) no navegador.
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import traceback
@@ -126,9 +127,11 @@ if "estilo" not in st.session_state:
     st.session_state.estilo = "crawl"
 
 
-def analisar(video_bytes, filename, estilo_sel, limiares=None):
+def analisar(video_bytes, filename, estilo_sel, limiares=None,
+             nadador="", email=""):
     """Salva o upload num arquivo temporário e roda o pipeline existente.
     `limiares` são os valores ajustados pelo usuário (None = padrão).
+    `nadador`/`email` entram no cabeçalho do PDF.
     Blindado: funciona com SwimAnalyzer novo (aceita thresholds=) e antigo
     (sem o parâmetro), e mostra o erro real na tela em vez de derrubar."""
     with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1] or ".mp4",
@@ -167,6 +170,8 @@ def analisar(video_bytes, filename, estilo_sel, limiares=None):
                 return None
             rep = analisador.report()
             rep["video"] = filename
+            rep["nadador"] = (nadador or "").strip()
+            rep["email"] = (email or "").strip()
             rep["frames_analisados"] = n
             rep["fontes"] = {
                 "cotovelo_crawl": "Vanderbilt YSJ 2025 (80–100°)",
@@ -196,6 +201,62 @@ def analisar(video_bytes, filename, estilo_sel, limiares=None):
         return rep, pdf_buf.getvalue(), json_buf.getvalue()
     finally:
         os.unlink(caminho)
+
+
+def enviar_email(destino, pdf_bytes, nome_nadador):
+    """Envia o PDF por SMTP. Credenciais em st.secrets (nunca no código):
+    [smtp] host, port, user, password, (opcional) remetente.
+    Retorna (ok: bool, detalhe: str) — em falha, detalhe traz a orientação."""
+    try:
+        cfg = st.secrets["smtp"]
+        host = cfg["host"]
+        port = int(cfg.get("port", 587))
+        user = cfg["user"]
+        senha = cfg["password"]
+        remetente = cfg.get("remetente", user)
+    except (KeyError, FileNotFoundError):
+        st.error("**Envio por e-mail não configurado.** O dono do app precisa "
+                 "definir as credenciais SMTP em `.streamlit/secrets.toml` "
+                 "(ou em *Settings → Secrets* no Streamlit Cloud). Modelo em "
+                 "`secrets.toml.example` incluído no pacote:")
+        st.code("[smtp]\nhost = \"smtp.gmail.com\"\nport = 587\n"
+                "user = \"seuemail@gmail.com\"\npassword = \"senha-de-app\"\n"
+                "remetente = \"Analisador de Nado <seuemail@gmail.com>\"")
+        return False, "Credenciais SMTP ausentes nos secrets."
+
+    import smtplib
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["Subject"] = "Relatório de Análise de Nado"
+    msg["From"] = remetente
+    msg["To"] = destino
+    corpo = (f"Olá{', ' + nome_nadador if nome_nadador else ''}.\n\n"
+             "Segue em anexo o relatório em PDF da análise do nado "
+             "(erros de movimento identificados, limiares usados e drills "
+             "de correção).\n\n— Analisador de Nado")
+    msg.set_content(corpo)
+    msg.add_attachment(pdf_bytes, maintype="application",
+                       subtype="pdf", filename="relatorio_nado.pdf")
+    try:
+        modo = str(cfg.get("tls", "starttls")).lower()  # starttls | ssl | none
+        with smtplib.SMTP(host, port, timeout=30) as smtp:
+            if modo == "ssl":
+                smtp.starttls()  # servidores que exigem TLS imediato após EHLO
+            if modo == "starttls":
+                smtp.starttls()
+            smtp.login(user, senha)
+            smtp.send_message(msg)
+        return True, "enviado"
+    except smtplib.SMTPAuthenticationError:
+        detalhe = ("Falha de autenticação SMTP: usuário/senha recusados. "
+                   "No Gmail, use uma **senha de app** (16 caracteres), não a "
+                   "senha normal da conta.")
+    except (smtplib.SMTPException, OSError, TimeoutError) as e:
+        detalhe = f"Falha de conexão/envio SMTP: `{e}`. Confira host, porta e "
+        detalhe += "regras de firewall do provedor."
+    st.error(detalhe)
+    return False, detalhe
 
 
 # --- seleção do estilo (botões) ----------------------------------------------
@@ -294,15 +355,33 @@ if _ajustados:
 else:
     st.caption("Todos os limiares estão nos valores padrão.")
 
+# --- dados do nadador (nome e e-mail para o relatório) -----------------------
+st.subheader("3. Dados do nadador (opcional)")
+_dn, _de = st.columns(2)
+nadador = _dn.text_input("Nome do nadador", value=st.session_state.get("nadador", ""),
+                         placeholder="Ex.: Maria da Silva",
+                         help="Aparece no cabeçalho do relatório em PDF.")
+email = _de.text_input("E-mail do nadador", value=st.session_state.get("email", ""),
+                       placeholder="ex.: maria@email.com",
+                       help="Aparece no PDF e é o destino padrão do envio por e-mail.")
+EMAIL_VALIDO = True
+if email.strip() and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email.strip()):
+    EMAIL_VALIDO = False
+    st.warning("O e-mail digitado não parece válido — corrija-o para poder "
+               "enviar o relatório por e-mail.")
+st.session_state.nadador = nadador
+st.session_state.email = email
+
 # --- upload -------------------------------------------------------------------
-st.subheader("3. Envie o vídeo")
+st.subheader("4. Envie o vídeo")
 arquivo = st.file_uploader("Vídeo do nado", type=["mp4", "mov", "avi", "mkv"])
 
-st.subheader("4. Analise")
+st.subheader("5. Analise")
 if arquivo and st.button("Analisar nado", type="primary"):
     with st.spinner("Processando vídeo (pose por frame + métricas + PDF)..."):
         res = analisar(arquivo.getvalue(), arquivo.name, st.session_state.estilo,
-                       limiares=st.session_state.get(_KEY_ED) or None)
+                       limiares=st.session_state.get(_KEY_ED) or None,
+                       nadador=nadador, email=email)
     if res:
         st.session_state.resultado = res
 
@@ -358,6 +437,7 @@ if res:
 
     # --- downloads
     st.divider()
+    st.subheader("Enviar e baixar o relatório")
     d1, d2 = st.columns(2)
     d1.download_button("⬇️ Baixar relatório (PDF)", pdf_bytes,
                        "relatorio_nado.pdf", "application/pdf",
@@ -365,5 +445,22 @@ if res:
     d2.download_button("⬇️ Baixar dados (JSON)", json_bytes,
                        "relatorio_nado.json", "application/json",
                        use_container_width=True)
+
+    # --- envio do PDF por e-mail
+    st.markdown("##### 📧 Enviar o relatório PDF por e-mail")
+    destino = st.text_input("E-mail de destino", value=(rep.get("email") or ""),
+                            placeholder="ex.: maria@email.com")
+    if st.button("📧 Enviar relatório por e-mail", disabled=not EMAIL_VALIDO):
+        if not destino.strip() or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+                                               destino.strip()):
+            st.error("Informe um e-mail de destino válido.")
+        else:
+            with st.spinner("Enviando e-mail..."):
+                ok, detalhe = enviar_email(destino.strip(), pdf_bytes,
+                                           rep.get("nadador") or "nadador")
+            if ok:
+                st.success(f"✅ Relatório enviado para **{destino.strip()}**.")
+            else:
+                st.error(detalhe)
 elif arquivo:
     st.info("Clique em **Analisar nado** para processar o vídeo enviado.")
