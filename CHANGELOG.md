@@ -64,3 +64,22 @@
 - `secrets.toml.example` incluído no pacote; seção de configuração no README.
 - Fluxo do app renumerado: 1 estilo → 2 limiares → 3 dados do nadador →
   4 vídeo → 5 analisar; downloads + envio de e-mail no final.
+
+## v13-smtp-robusto (2026-11-16)
+
+### Corrigido/novo
+- **Envio SMTP robusto contra "Connection unexpectedly closed"**: o modo é
+  escolhido pela porta (465 → SMTP_SSL implícito; 587/25 → STARTTLS) e, se a
+  primeira tentativa falhar, o app tenta automaticamente a outra modalidade.
+  Cada tentativa tem timeout de 30 s; a lista de tentativas e os erros
+  exatos (classe + mensagem) aparecem na tela.
+- **Fallback por API HTTPS** (porta 443, nunca bloqueada por clouds): se o
+  SMTP falhar, o app tenta `[email_api]` nos secrets com **Resend**, **SendGrid**
+  ou **Brevo** (attachment do PDF em base64). Aviso na tela indica que o envio
+  foi feito pela API.
+- Corrigido bug interno: `replace_header("From", ...)` com `KeyError` na
+  primeira tentativa.
+- `secrets.toml.example` reescrito com provedores (Gmail senha de app,
+  Outlook, Yahoo) + bloco `[email_api]`; README atualizado.
+- Verificado: porta 587 fechada → envio sai pela 465/SSL; SMTP totalmente
+  bloqueado → envio sai pela API; análise de ponta a ponta íntegra.

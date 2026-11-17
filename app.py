@@ -203,33 +203,143 @@ def analisar(video_bytes, filename, estilo_sel, limiares=None,
         os.unlink(caminho)
 
 
+def _smtp_tentativas(cfg):
+    """Gera tentativas SMTP ordenadas pela porta configurada:
+    465 → SSL implícito (SMTP_SSL); 587/25 → STARTTLS; depois tenta a outra
+    modalidade como fallback (servidores/provedores fecham a primeira)."""
+    host = cfg["host"]
+    port = int(cfg.get("port", 587))
+    user = cfg["user"]
+    senha = cfg["password"]
+    remetente = cfg.get("remetente", user)
+    primaria = "ssl" if port == 465 else "starttls"
+    secundaria = "starttls" if primaria == "ssl" else "ssl"
+    ordem = [(primaria, port)]
+    if primaria == "ssl":
+        ordem.append(("starttls", 587))
+    else:
+        ordem.append(("ssl", 465))
+    # dedup mantendo a ordem (porta customizada 465/587 pode repetir)
+    vistos = set()
+    for modo, p in ordem:
+        if (modo, p) not in vistos:
+            vistos.add((modo, p))
+            yield host, p, modo, user, senha, remetente
+
+
+def _smtp_enviar(host, port, modo, user, senha, remetente, msg):
+    """Uma tentativa SMTP; retorna None em sucesso ou a exceção capturada."""
+    import smtplib
+    try:
+        if modo == "ssl":
+            with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
+                smtp.login(user, senha)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=30) as smtp:
+                smtp.ehlo()
+                smtp.starttls()
+                smtp.ehlo()
+                smtp.login(user, senha)
+                smtp.send_message(msg)
+        return None
+    except Exception as e:  # noqa: BLE001 — capturada para relatório detalhado
+        return e
+
+
+def _email_api_enviar(destino, pdf_bytes, nome_nadador):
+    """Fallback via API HTTPS (Resend/SendGrid/Brevo) — para hosts que
+    bloqueiam SMTP de saída. Usa st.secrets[email_api]: provider + api_key +
+    remetente. Retorna (ok, detalhe)."""
+    try:
+        cfg = st.secrets["email_api"]
+        provider = str(cfg["provider"]).lower()
+        api_key = cfg["api_key"]
+        remetente = cfg.get("remetente", "Analisador de Nado <onboarding@resend.dev>")
+    except (KeyError, FileNotFoundError):
+        return False, None  # fallback não configurado — segue sem ele
+
+    import json as _json
+    import urllib.request
+
+    assunto = "Relatório de Análise de Nado"
+    corpo = (f"Olá{', ' + nome_nadador if nome_nadador else ''}.\n\n"
+             "Segue em anexo o relatório em PDF da análise do nado.\n\n"
+             "— Analisador de Nado")
+    anexo_b64 = __import__("base64").b64encode(pdf_bytes).decode()
+    try:
+        if provider == "resend":
+            dados = _json.dumps({
+                "from": remetente, "to": [destino], "subject": assunto,
+                "text": corpo,
+                "attachments": [{"filename": "relatorio_nado.pdf",
+                                 "content": anexo_b64}]}).encode()
+            req = urllib.request.Request(
+                "https://api.resend.com/emails", data=dados, method="POST",
+                headers={"Authorization": f"Bearer {api_key}",
+                         "Content-Type": "application/json"})
+        elif provider in ("sendgrid", "brevo"):
+            if provider == "sendgrid":
+                url = "https://api.sendgrid.com/v3/mail/send"
+                dados = _json.dumps({
+                    "personalizations": [{"to": [{"email": destino}]}],
+                    "from": {"email": remetente}, "subject": assunto,
+                    "content": [{"type": "text/plain", "value": corpo}],
+                    "attachments": [{"content": anexo_b64,
+                                     "filename": "relatorio_nado.pdf",
+                                     "type": "application/pdf"}]}).encode()
+                headers = {"Authorization": f"Bearer {api_key}",
+                           "Content-Type": "application/json"}
+            else:  # brevo
+                url = "https://api.brevo.com/v3/smtp/email"
+                dados = _json.dumps({
+                    "sender": {"email": remetente}, "to": [{"email": destino}],
+                    "subject": assunto, "textContent": corpo,
+                    "attachment": [{"name": "relatorio_nado.pdf",
+                                    "content": anexo_b64}]}).encode()
+                headers = {"api-key": api_key,
+                           "Content-Type": "application/json",
+                           "accept": "application/json"}
+            req = urllib.request.Request(url, data=dados, method="POST",
+                                         headers=headers)
+        else:
+            return False, None
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if 200 <= resp.status < 300:
+                return True, "enviado via API"
+            return False, f"API {provider} respondeu HTTP {resp.status}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"API {provider} falhou: `{e}`"
+
+
 def enviar_email(destino, pdf_bytes, nome_nadador):
-    """Envia o PDF por SMTP. Credenciais em st.secrets (nunca no código):
-    [smtp] host, port, user, password, (opcional) remetente.
-    Retorna (ok: bool, detalhe: str) — em falha, detalhe traz a orientação."""
+    """Envia o PDF por SMTP (com fallback de modo/porta) e, se o SMTP for
+    bloqueado, por API HTTPS (Resend/SendGrid/Brevo) quando configurada.
+    Credenciais em st.secrets — nunca no código. Retorna (ok, detalhe)."""
     try:
         cfg = st.secrets["smtp"]
-        host = cfg["host"]
-        port = int(cfg.get("port", 587))
-        user = cfg["user"]
-        senha = cfg["password"]
-        remetente = cfg.get("remetente", user)
+        cfg = dict(cfg)  # copia p/ poder ler .get nas tentativas
     except (KeyError, FileNotFoundError):
-        st.error("**Envio por e-mail não configurado.** O dono do app precisa "
-                 "definir as credenciais SMTP em `.streamlit/secrets.toml` "
-                 "(ou em *Settings → Secrets* no Streamlit Cloud). Modelo em "
-                 "`secrets.toml.example` incluído no pacote:")
+        # SMTP ausente: tenta direto a API (fallback configurado)
+        ok_api, det_api = _email_api_enviar(destino, pdf_bytes, nome_nadador)
+        if ok_api:
+            return True, det_api
+        st.error("**Envio por e-mail não configurado.** Defina as credenciais "
+                 "SMTP em `[smtp]` e/ou uma API em `[email_api]` nos secrets "
+                 "(modelos em `secrets.toml.example`):")
         st.code("[smtp]\nhost = \"smtp.gmail.com\"\nport = 587\n"
                 "user = \"seuemail@gmail.com\"\npassword = \"senha-de-app\"\n"
-                "remetente = \"Analisador de Nado <seuemail@gmail.com>\"")
-        return False, "Credenciais SMTP ausentes nos secrets."
+                "remetente = \"Analisador de Nado <seuemail@gmail.com>\"\n\n"
+                "# alternativa quando o host bloqueia SMTP:\n"
+                "[email_api]\nprovider = \"resend\" # ou sendgrid/brevo\n"
+                "api_key = \"re_...\"\n"
+                "remetente = \"Analisador de Nado <voce@seudominio.com>\"")
+        return False, "Credenciais ausentes nos secrets."
 
-    import smtplib
     from email.message import EmailMessage
 
     msg = EmailMessage()
     msg["Subject"] = "Relatório de Análise de Nado"
-    msg["From"] = remetente
     msg["To"] = destino
     corpo = (f"Olá{', ' + nome_nadador if nome_nadador else ''}.\n\n"
              "Segue em anexo o relatório em PDF da análise do nado "
@@ -238,23 +348,34 @@ def enviar_email(destino, pdf_bytes, nome_nadador):
     msg.set_content(corpo)
     msg.add_attachment(pdf_bytes, maintype="application",
                        subtype="pdf", filename="relatorio_nado.pdf")
-    try:
-        modo = str(cfg.get("tls", "starttls")).lower()  # starttls | ssl | none
-        with smtplib.SMTP(host, port, timeout=30) as smtp:
-            if modo == "ssl":
-                smtp.starttls()  # servidores que exigem TLS imediato após EHLO
-            if modo == "starttls":
-                smtp.starttls()
-            smtp.login(user, senha)
-            smtp.send_message(msg)
-        return True, "enviado"
-    except smtplib.SMTPAuthenticationError:
-        detalhe = ("Falha de autenticação SMTP: usuário/senha recusados. "
-                   "No Gmail, use uma **senha de app** (16 caracteres), não a "
-                   "senha normal da conta.")
-    except (smtplib.SMTPException, OSError, TimeoutError) as e:
-        detalhe = f"Falha de conexão/envio SMTP: `{e}`. Confira host, porta e "
-        detalhe += "regras de firewall do provedor."
+
+    erros_smtp = []
+    for host, port, modo, user, senha, remetente in _smtp_tentativas(cfg):
+        if "From" in msg:
+            msg.replace_header("From", remetente)
+        else:
+            msg["From"] = remetente
+        e = _smtp_enviar(host, port, modo, user, senha, remetente, msg)
+        if e is None:
+            return True, f"enviado via SMTP ({host}:{port} {modo})"
+        erros_smtp.append(f"{host}:{port} ({modo}) → {type(e).__name__}: {e}")
+
+    # SMTP falhou (ex.: porta bloqueada pelo host) → tenta a API HTTPS
+    ok_api, det_api = _email_api_enviar(destino, pdf_bytes, nome_nadador)
+    if ok_api:
+        st.warning("O SMTP direto foi bloqueado — o envio foi feito pela API "
+                   "de e-mail configurada em `[email_api]`.")
+        return True, det_api
+
+    detalhe = ("**Falha de envio SMTP** — todas as tentativas foram fechadas "
+               "pelo servidor/provedor:\n\n" + "\n".join(f"- {x}" for x in erros_smtp) +
+               "\n\n**Causa típica:** o host bloqueia portas SMTP de saída "
+               "(25/587 comuns em clouds). Soluções: (1) use a porta **465 com "
+               "SSL** — já tentada acima; (2) configure o fallback **`[email_api]`** "
+               "com Resend/SendGrid/Brevo (HTTPS, porta 443, nunca bloqueada) — "
+               "modelo em `secrets.toml.example`.")
+    if det_api:
+        detalhe += f"\n\nFallback por API também falhou: {det_api}"
     st.error(detalhe)
     return False, detalhe
 

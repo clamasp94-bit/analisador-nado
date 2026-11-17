@@ -35,7 +35,7 @@ except ImportError:
 
 # Versão do pipeline — exibida na barra lateral do app; o valor no ar
 # confirma qual código está realmente rodando no Streamlit Cloud.
-VERSION = "v12-nadador-email"
+VERSION = "v13-smtp-robusto"
 
 
 # ----------------------------------------------------------------------------
