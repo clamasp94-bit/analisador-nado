@@ -260,6 +260,7 @@ def _email_api_enviar(destino, pdf_bytes, nome_nadador):
         return False, None  # fallback não configurado — segue sem ele
 
     import json as _json
+    import urllib.error
     import urllib.request
 
     assunto = "Relatório de Análise de Nado"
@@ -267,6 +268,28 @@ def _email_api_enviar(destino, pdf_bytes, nome_nadador):
              "Segue em anexo o relatório em PDF da análise do nado.\n\n"
              "— Analisador de Nado")
     anexo_b64 = __import__("base64").b64encode(pdf_bytes).decode()
+
+    # Validação do remetente: a Resend recusa domínios de e-mail gratuito e,
+    # em modo de teste (resend.dev), só entrega ao próprio e-mail da conta.
+    dominio_de = remetente.split("@")[-1].strip("> ").lower()
+    gratuitos = {"gmail.com", "googlemail.com", "hotmail.com", "outlook.com",
+                 "live.com", "yahoo.com", "icloud.com", "bol.com.br",
+                 "uol.com.br", "terra.com.br", "globo.com"}
+    if provider == "resend" and dominio_de == "resend.dev":
+        st.warning("⚠️ Remetente em modo de teste da Resend (onboarding@resend.dev): "
+                   "só entrega ao PRÓPRIO e-mail da conta Resend. Para enviar a "
+                   "qualquer destinatário, verifique um domínio próprio em "
+                   "resend.com/domains e use-o no campo remetente. A tentativa "
+                   "será feita mesmo assim.")
+    if provider == "resend" and dominio_de in gratuitos:
+        st.warning(f"⚠️ A Resend não permite enviar de domínio gratuito "
+                   f"('{dominio_de}'). A tentativa será feita, mas deve retornar "
+                   "403 — use 'onboarding@resend.dev' (apenas testes) ou verifique "
+                   "um domínio próprio em resend.com/domains.")
+
+    # User-Agent explícito: o Cloudflare bloqueia o 'Python-urllib' padrão
+    # (Resend KB: 403 erro 1010)
+    UA = "analisador-nado/1.0"
     try:
         if provider == "resend":
             dados = _json.dumps({
@@ -277,7 +300,8 @@ def _email_api_enviar(destino, pdf_bytes, nome_nadador):
             req = urllib.request.Request(
                 "https://api.resend.com/emails", data=dados, method="POST",
                 headers={"Authorization": f"Bearer {api_key}",
-                         "Content-Type": "application/json"})
+                         "Content-Type": "application/json",
+                         "User-Agent": UA})
         elif provider in ("sendgrid", "brevo"):
             if provider == "sendgrid":
                 url = "https://api.sendgrid.com/v3/mail/send"
@@ -289,7 +313,8 @@ def _email_api_enviar(destino, pdf_bytes, nome_nadador):
                                      "filename": "relatorio_nado.pdf",
                                      "type": "application/pdf"}]}).encode()
                 headers = {"Authorization": f"Bearer {api_key}",
-                           "Content-Type": "application/json"}
+                           "Content-Type": "application/json",
+                           "User-Agent": UA}
             else:  # brevo
                 url = "https://api.brevo.com/v3/smtp/email"
                 dados = _json.dumps({
@@ -299,15 +324,27 @@ def _email_api_enviar(destino, pdf_bytes, nome_nadador):
                                     "content": anexo_b64}]}).encode()
                 headers = {"api-key": api_key,
                            "Content-Type": "application/json",
-                           "accept": "application/json"}
+                           "accept": "application/json",
+                           "User-Agent": UA}
             req = urllib.request.Request(url, data=dados, method="POST",
                                          headers=headers)
         else:
             return False, None
         with urllib.request.urlopen(req, timeout=30) as resp:
+            corpo_resp = resp.read().decode("utf-8", "replace")
             if 200 <= resp.status < 300:
                 return True, "enviado via API"
-            return False, f"API {provider} respondeu HTTP {resp.status}"
+            return False, f"API {provider} respondeu HTTP {resp.status}: {corpo_resp[:300]}"
+    except urllib.error.HTTPError as e:
+        # o corpo da resposta traz a causa REAL (ex.: 'domain not verified',
+        # 'API key is not active') — exibir em vez de engolir
+        try:
+            corpo = e.read().decode("utf-8", "replace")
+        except Exception:
+            corpo = "(sem corpo na resposta)"
+        return False, (f"API {provider} respondeu HTTP {e.code}: {corpo[:400]} — "
+                       "a causa exata está nessa mensagem (domínio não verificado, "
+                       "chave inválida/inativa ou destino fora do modo de teste).")
     except Exception as e:  # noqa: BLE001
         return False, f"API {provider} falhou: `{e}`"
 
